@@ -13,3 +13,4 @@ dist/
 *.log
 settings.json
 local_check.py
+*.pyc
