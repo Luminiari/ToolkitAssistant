@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+build/
+dist/
+*.spec
+
+*.bak-*
+*.lsx
+*.log
+settings.json
+local_check.py

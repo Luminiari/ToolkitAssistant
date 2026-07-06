@@ -25,88 +25,50 @@ function Get-PythonValue {
     return ($value | Select-Object -First 1).Trim()
 }
 
+function Get-VersionInfoValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $match = [regex]::Match($Text, "StringStruct\(`"$Name`",\s*`"([^`"]+)`"\)")
+    if ($match.Success) {
+        return $match.Groups[1].Value
+    }
+
+    return $null
+}
+
 if (-not $SkipInstall) {
     Invoke-CheckedPython -m pip install -r requirements-build.txt
 }
 
-$pythonRoot = Get-PythonValue "import sys; print(sys.base_prefix)"
-$dllRoot = Join-Path $pythonRoot "DLLs"
-$tclRoot = Join-Path $pythonRoot "tcl"
-$hookRoot = Join-Path (Get-Location).Path "pyinstaller-hooks"
-$assetRoot = Join-Path (Get-Location).Path "assets"
-$iconPath = Join-Path (Get-Location).Path "assets\ToolkitAssistant.ico"
+$pythonExecutable = Get-PythonValue "import sys; print(sys.executable)"
+if ($pythonExecutable -like "*\WindowsApps\*") {
+    Write-Warning "py2exe says Windows Store Python is unsupported. If this falls over, try Python from python.org."
+}
+
+Invoke-CheckedPython py2exe_build.py
+
+$outputFolder = Join-Path (Get-Location).Path "dist\ToolkitAssistant"
+$outputExe = Join-Path $outputFolder "ToolkitAssistant.exe"
 $versionInfoPath = Join-Path (Get-Location).Path "version_info.txt"
+$versionInfoText = Get-Content -Raw -LiteralPath $versionInfoPath
+$version = Get-VersionInfoValue -Text $versionInfoText -Name "ProductVersion"
+if (-not $version) {
+    $version = Get-VersionInfoValue -Text $versionInfoText -Name "FileVersion"
+}
+if (-not $version) {
+    throw "Could not read ProductVersion or FileVersion from version_info.txt."
+}
+$zipPath = Join-Path (Get-Location).Path "dist\ToolkitAssistant-v$version.zip"
 
-$buildArgs = @(
-    "--clean",
-    "--noconfirm",
-    "--onefile",
-    "--windowed",
-    "--name",
-    "ToolkitAssistant",
-    "--distpath",
-    "dist",
-    "--workpath",
-    "build",
-    "--specpath",
-    "build",
-    "--additional-hooks-dir",
-    $hookRoot,
-    "--hidden-import",
-    "tkinter",
-    "--hidden-import",
-    "tkinter.ttk",
-    "--hidden-import",
-    "tkinter.filedialog",
-    "--hidden-import",
-    "tkinter.messagebox",
-    "--hidden-import",
-    "_tkinter"
-)
-
-if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
-    $buildArgs += @("--icon", $iconPath)
+if (-not (Test-Path -LiteralPath $outputExe -PathType Leaf)) {
+    throw "py2exe finished, but the exe was not found at $outputExe."
 }
 
-if (Test-Path -LiteralPath $versionInfoPath -PathType Leaf) {
-    $buildArgs += @("--version-file", $versionInfoPath)
-    $buildArgs += @("--add-data", "$versionInfoPath;.")
-}
+Compress-Archive -LiteralPath $outputFolder -DestinationPath $zipPath -Force
 
-if (Test-Path -LiteralPath $assetRoot -PathType Container) {
-    $buildArgs += @("--add-data", "$assetRoot;assets")
-}
-
-if (Test-Path -LiteralPath $tclRoot) {
-    $tclDir = Get-ChildItem -LiteralPath $tclRoot -Directory -Filter "tcl*" |
-        Where-Object { $_.Name -match "^tcl\d" } |
-        Sort-Object Name -Descending |
-        Select-Object -First 1
-    $tkDir = Get-ChildItem -LiteralPath $tclRoot -Directory -Filter "tk*" |
-        Where-Object { $_.Name -match "^tk\d" } |
-        Sort-Object Name -Descending |
-        Select-Object -First 1
-
-    if ($tclDir -and $tkDir) {
-        $buildArgs += @("--add-data", "$($tclDir.FullName);_tcl_data")
-        $buildArgs += @("--add-data", "$($tkDir.FullName);_tk_data")
-    }
-}
-
-foreach ($binaryName in @("_tkinter*.pyd", "tcl*.dll", "tk*.dll")) {
-    if (-not (Test-Path -LiteralPath $dllRoot)) {
-        continue
-    }
-
-    $binary = Get-ChildItem -LiteralPath $dllRoot -File -Filter $binaryName | Select-Object -First 1
-    if ($binary) {
-        $destination = if ($binary.Extension -eq ".pyd") { "DLLs" } else { "." }
-        $buildArgs += @("--add-binary", "$($binary.FullName);$destination")
-    }
-}
-
-$buildArgs += "ToolkitAssistant.pyw"
-
-Invoke-CheckedPython -c "import PyInstaller.__main__, sys; PyInstaller.__main__.run(sys.argv[1:])" @buildArgs
-
-Write-Host "Built dist\ToolkitAssistant.exe"
+Write-Host "Built $outputExe"
+Write-Host "Zipped $zipPath"
+Write-Host "Release folder layout: ToolkitAssistant.exe, python312.dll, lib\, runtime\"

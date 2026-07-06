@@ -56,6 +56,13 @@ def load_tk() -> None:
     if tk is not None:
         return
 
+    tcl_dir = RESOURCE_DIR / "lib" / "tcl"
+    tk_dir = RESOURCE_DIR / "lib" / "tk"
+    if tcl_dir.is_dir():
+        os.environ.setdefault("TCL_LIBRARY", str(tcl_dir))
+    if tk_dir.is_dir():
+        os.environ.setdefault("TK_LIBRARY", str(tk_dir))
+
     import tkinter as tk_module
     from tkinter import filedialog as filedialog_module
     from tkinter import messagebox as messagebox_module
