@@ -17,7 +17,7 @@ If you are here to look at the source or build it yourself, I am sorry for what 
 * Renames Toolkit mod folders while preserving UUID suffixes
 * Backs up Toolkit project folders before you do something adventurous
 
-## What's in it
+## What's In It
 
 The app entry point is:
 
@@ -53,7 +53,7 @@ For running from source:
 For building the EXE:
 
 * Everything above
-* PyInstaller, installed by `build.ps1` from `requirements-build.txt`
+* py2exe, installed by `build.ps1` from `requirements-build.txt`
 
 `Divine.exe` can be selected in the app's Settings tab, or exposed with:
 
@@ -92,6 +92,13 @@ The finished app is written to:
 ```text
 dist\ToolkitAssistant.exe
 ```
+
+with a release zip written to:
+
+```text
+dist\ToolkitAssistant-v[VERSION].zip
+```
+where [VERSION] comes from `version_info.txt`, so ideally I only have to remember one thing.
 
 ## Local Settings
 
