@@ -26,6 +26,7 @@ from .constants import (
     APP_ICON_PATH,
     APP_TITLE,
     APP_VERSION,
+    CONSOLE_ICON_PATH,
     INTRO_DISMISSED_KEY,
     LSLIB_RELEASES_URL,
     RESOURCE_DIR,
@@ -125,8 +126,9 @@ class ToolkitAssistantApp:
 
         self.settings = load_settings()
         self.mesh_file_path = tk.StringVar(master=self.root)
-        self.auto_bounds_mode = tk.StringVar(master=self.root, value="single")
-        self.auto_lsf_path = tk.StringVar(master=self.root)
+        self.auto_bounds_mode = tk.StringVar(master=self.root, value="batch")
+        self.auto_selected_lsf_summary = tk.StringVar(master=self.root, value="No files selected")
+        self.auto_selected_lsf_paths: list[str] = []
         self.auto_content_folder_path = tk.StringVar(master=self.root)
         self.patch_lsf_mode = tk.StringVar(master=self.root, value="single")
         self.patch_single_lsf_path = tk.StringVar(master=self.root)
@@ -162,9 +164,13 @@ class ToolkitAssistantApp:
         self.messages: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.worker: threading.Thread | None = None
         self.run_buttons: list[object] = []
-        self.active_output_text = None
+        self.active_output_name = ""
         self.active_status_label = None
         self.about_link_icons: list[object] = []
+        self.console_icon = None
+        self.console_output_text = None
+        self.console_toggle_buttons: list[object] = []
+        self.console_window = None
         self.intro_window = None
         self.latest_mesh_bounds_xml = ""
 
@@ -207,8 +213,13 @@ class ToolkitAssistantApp:
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
-        title = ttk.Label(outer, text=APP_HEADING, style="Title.TLabel")
-        title.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        header = ttk.Frame(outer)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header.columnconfigure(0, weight=1)
+
+        title = ttk.Label(header, text=APP_HEADING, style="Title.TLabel")
+        title.grid(row=0, column=0, sticky="w")
+        self._build_console_toggle(header).grid(row=0, column=1, sticky="e")
 
         accent_bar = tk.Frame(outer, height=3, bg=ACCENT_COLOR)
         accent_bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -251,7 +262,7 @@ class ToolkitAssistantApp:
         self._build_import_repair_tab(import_tab)
         self._build_project_backup_tab(project_backup_tab)
         self._build_settings_tab(settings_tab)
-        self.active_output_text = self.auto_output_text
+        self.active_output_name = "One-Click Patcher"
         self.active_status_label = self.auto_status_label
 
     def _show_intro_dialog(self) -> None:
@@ -374,30 +385,133 @@ class ToolkitAssistantApp:
         label.after_idle(update_wrap)
         return label
 
-    def _build_log_area(self, tab, row: int, *, height: int = 7):
-        log_frame = ttk.Frame(tab)
-        log_frame.grid(row=row, column=0, columnspan=3, sticky="nsew", pady=(10, 10))
+    def _build_spacer_row(self, tab, row: int, *, columnspan: int = 3):
+        spacer = ttk.Frame(tab)
+        spacer.grid(row=row, column=0, columnspan=columnspan, sticky="nsew")
+        return spacer
+
+    def _build_console_toggle(self, parent):
+        icon = self._load_console_icon()
+        if icon is None:
+            console_toggle = ttk.Label(parent, text="Log", cursor="hand2", padding=(4, 2))
+        else:
+            console_toggle = ttk.Label(parent, image=icon, cursor="hand2", padding=0)
+
+        console_toggle.bind("<Button-1>", lambda _event: self._toggle_console_window())
+        self.console_toggle_buttons.append(console_toggle)
+        ToolTip(console_toggle, "Show or hide log")
+        return console_toggle
+
+    def _build_tab_footer(self, tab, row: int, *, columnspan: int = 3):
+        footer = ttk.Frame(tab)
+        footer.grid(row=row, column=0, columnspan=columnspan, sticky="sew")
+        footer.columnconfigure(0, weight=1)
+        footer.rowconfigure(0, weight=1)
+
+        status_label = ttk.Label(footer, text="", style="Accent.TLabel")
+        status_label.grid(row=0, column=0, sticky="sw")
+
+        return status_label
+
+    def _load_console_icon(self):
+        if self.console_icon is not None:
+            return self.console_icon
+        if not CONSOLE_ICON_PATH.is_file():
+            return None
+
+        try:
+            icon = tk.PhotoImage(file=str(CONSOLE_ICON_PATH))
+        except tk.TclError:
+            return None
+
+        target_size = 16
+        factor = max(icon.width() // target_size, icon.height() // target_size, 1)
+        if factor > 1:
+            icon = icon.subsample(factor, factor)
+        self.console_icon = icon
+        return self.console_icon
+
+    def _ensure_console_window(self) -> None:
+        if self.console_window is not None and self.console_window.winfo_exists():
+            return
+
+        window = tk.Toplevel(self.root)
+        self.console_window = window
+        window.title("Toolkit Assistant Log")
+        self._set_window_icon(window)
+        window.geometry("720x360")
+        window.minsize(520, 240)
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        window.protocol("WM_DELETE_WINDOW", self._hide_console_window)
+
+        toolbar = ttk.Frame(window, padding=(10, 10, 10, 0))
+        toolbar.grid(row=0, column=0, sticky="ew")
+        toolbar.columnconfigure(0, weight=1)
+        ttk.Button(toolbar, text="Clear", command=self._clear_console_output).grid(row=0, column=1, sticky="e")
+
+        log_frame = tk.Frame(window, bg="#15181f", highlightbackground="#343a46", highlightthickness=1)
+        log_frame.grid(row=1, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
         output_text = tk.Text(
             log_frame,
-            height=height,
+            background="#15181f",
+            borderwidth=0,
+            foreground="#e7eaf0",
             wrap="word",
             font=("Consolas", 9),
+            highlightthickness=0,
+            insertbackground="#e7eaf0",
+            padx=12,
+            pady=10,
+            relief="flat",
+            selectbackground="#3d4554",
+            selectforeground="#ffffff",
             state="disabled",
         )
         output_text.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(log_frame, command=output_text.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         output_text.configure(yscrollcommand=scrollbar.set)
+        output_text.tag_configure("section", foreground="#d6a8ff")
+        output_text.tag_configure("complete", foreground="#96f2b2")
+        output_text.tag_configure("error", foreground="#ff8f9a")
+        self.console_output_text = output_text
 
-        footer = ttk.Frame(tab)
-        footer.grid(row=row + 1, column=0, columnspan=3, sticky="ew")
-        footer.columnconfigure(0, weight=1)
-        status_label = ttk.Label(footer, text="", style="Accent.TLabel")
-        status_label.grid(row=0, column=0, sticky="w")
-        return output_text, status_label
+        window.withdraw()
+
+    def _toggle_console_window(self) -> None:
+        self._ensure_console_window()
+        if self.console_window.state() == "withdrawn":
+            self._show_console_window()
+        else:
+            self._hide_console_window()
+
+    def _show_console_window(self) -> None:
+        self._ensure_console_window()
+        self.console_window.deiconify()
+        self.console_window.lift()
+        self.console_window.focus_set()
+
+    def _hide_console_window(self) -> None:
+        if self.console_window is not None and self.console_window.winfo_exists():
+            self.console_window.withdraw()
+
+    def _clear_console_output(self) -> None:
+        self._ensure_console_window()
+        output = self.console_output_text
+        output.configure(state="normal")
+        output.delete("1.0", "end")
+        output.configure(state="disabled")
+
+    def _start_console_section(self) -> None:
+        self._ensure_console_window()
+        existing_text = self.console_output_text.get("1.0", "end-1c")
+        prefix = "\n\n" if existing_text else ""
+        section_name = self.active_output_name or "Run"
+        self._append_output(f"{prefix}[{section_name}]\n", "section")
 
     def _build_mesh_bounds_tab(self, tab) -> None:
         tab.columnconfigure(1, weight=1)
@@ -435,7 +549,8 @@ class ToolkitAssistantApp:
             style="Accent.TButton",
         ).grid(row=0, column=2, sticky="e")
 
-        self.mesh_bounds_output_text, self.mesh_bounds_status_label = self._build_log_area(tab, 3, height=7)
+        self._build_spacer_row(tab, 3)
+        self.mesh_bounds_status_label = self._build_tab_footer(tab, 4)
 
     def _build_patch_lsf_tab(self, tab) -> None:
         tab.columnconfigure(1, weight=1)
@@ -560,7 +675,8 @@ class ToolkitAssistantApp:
         self.patch_lsf_run_button.grid(row=0, column=3, sticky="e")
         self.run_buttons.append(self.patch_lsf_run_button)
 
-        self.patch_output_text, self.patch_status_label = self._build_log_area(tab, 5, height=7)
+        self._build_spacer_row(tab, 5)
+        self.patch_status_label = self._build_tab_footer(tab, 6)
 
         self._update_patch_lsf_mode()
 
@@ -573,34 +689,48 @@ class ToolkitAssistantApp:
         mode_frame.grid(row=0, column=1, columnspan=2, sticky="w")
         ttk.Radiobutton(
             mode_frame,
-            text="Single file",
-            value="single",
+            text="Batch",
+            value="batch",
             variable=self.auto_bounds_mode,
             command=self._update_auto_bounds_mode,
         ).grid(row=0, column=0, sticky="w", padx=(0, 16))
         ttk.Radiobutton(
             mode_frame,
-            text="Batch",
-            value="batch",
+            text="Whole Folder",
+            value="whole_folder",
             variable=self.auto_bounds_mode,
             command=self._update_auto_bounds_mode,
         ).grid(row=0, column=1, sticky="w")
 
-        self.auto_single_target_frame = ttk.Frame(tab)
-        self.auto_single_target_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(12, 0))
-        self.auto_single_target_frame.columnconfigure(1, weight=1)
-        ttk.Label(self.auto_single_target_frame, text="LSF file").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(self.auto_single_target_frame, textvariable=self.auto_lsf_path).grid(
+        self.auto_selected_target_frame = ttk.Frame(tab)
+        self.auto_selected_target_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        self.auto_selected_target_frame.columnconfigure(1, weight=1)
+        ttk.Label(self.auto_selected_target_frame, text="LSF file(s)").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(self.auto_selected_target_frame, textvariable=self.auto_selected_lsf_summary).grid(
             row=0,
             column=1,
-            sticky="ew",
+            sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(self.auto_single_target_frame, text="Browse", command=self._browse_auto_lsf).grid(
+        ttk.Button(self.auto_selected_target_frame, text="Select File(s)", command=self._browse_auto_selected_lsfs).grid(
             row=0,
             column=2,
             sticky="ew",
         )
+        selected_list_frame = ttk.Frame(self.auto_selected_target_frame)
+        selected_list_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        selected_list_frame.columnconfigure(0, weight=1)
+        self.auto_selected_lsf_listbox = tk.Listbox(
+            selected_list_frame,
+            height=4,
+            font=("Consolas", 9),
+            activestyle="none",
+            exportselection=False,
+        )
+        self.auto_selected_lsf_listbox.grid(row=0, column=0, sticky="ew")
+        selected_list_scrollbar = ttk.Scrollbar(selected_list_frame, command=self.auto_selected_lsf_listbox.yview)
+        selected_list_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.auto_selected_lsf_listbox.configure(yscrollcommand=selected_list_scrollbar.set)
 
         self.auto_batch_target_frame = ttk.Frame(tab)
         self.auto_batch_target_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(12, 0))
@@ -624,7 +754,8 @@ class ToolkitAssistantApp:
         self._add_wrapping_label(
             note_box,
             (
-                "Patch VisualBank bounds from related GR2 meshes. Batch mode can take a while on larger projects."
+                "Patch VisualBank bounds from related GR2 meshes. Batch mode patches one or more selected LSF files; "
+                "Whole Folder mode scans every valid LSF under a folder."
             ),
         )
 
@@ -652,7 +783,8 @@ class ToolkitAssistantApp:
         self.auto_run_button.grid(row=0, column=3, sticky="e")
         self.run_buttons.append(self.auto_run_button)
 
-        self.auto_output_text, self.auto_status_label = self._build_log_area(tab, 4, height=8)
+        self._build_spacer_row(tab, 4)
+        self.auto_status_label = self._build_tab_footer(tab, 5)
         self._update_auto_bounds_mode()
 
     def _build_import_repair_tab(self, tab) -> None:
@@ -691,28 +823,8 @@ class ToolkitAssistantApp:
         self.import_run_button.grid(row=0, column=2, sticky="e")
         self.run_buttons.append(self.import_run_button)
 
-        log_frame = ttk.Frame(tab)
-        log_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=(10, 10))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-
-        self.import_output_text = tk.Text(
-            log_frame,
-            height=13,
-            wrap="word",
-            font=("Consolas", 9),
-            state="disabled",
-        )
-        self.import_output_text.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(log_frame, command=self.import_output_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.import_output_text.configure(yscrollcommand=scrollbar.set)
-
-        footer = ttk.Frame(tab)
-        footer.grid(row=4, column=0, columnspan=3, sticky="ew")
-        footer.columnconfigure(0, weight=1)
-        self.import_status_label = ttk.Label(footer, text="", style="Accent.TLabel")
-        self.import_status_label.grid(row=0, column=0, sticky="w")
+        self._build_spacer_row(tab, 3)
+        self.import_status_label = self._build_tab_footer(tab, 4)
 
     def _build_project_backup_tab(self, tab) -> None:
         tab.columnconfigure(1, weight=1)
@@ -835,28 +947,8 @@ class ToolkitAssistantApp:
         self.project_backup_run_button.grid(row=0, column=2, sticky="e")
         self.run_buttons.append(self.project_backup_run_button)
 
-        log_frame = ttk.Frame(tab)
-        log_frame.grid(row=10, column=0, columnspan=3, sticky="nsew", pady=(10, 10))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-
-        self.project_backup_output_text = tk.Text(
-            log_frame,
-            height=8,
-            wrap="word",
-            font=("Consolas", 9),
-            state="disabled",
-        )
-        self.project_backup_output_text.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(log_frame, command=self.project_backup_output_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.project_backup_output_text.configure(yscrollcommand=scrollbar.set)
-
-        footer = ttk.Frame(tab)
-        footer.grid(row=11, column=0, columnspan=3, sticky="ew")
-        footer.columnconfigure(0, weight=1)
-        self.project_backup_status_label = ttk.Label(footer, text="", style="Accent.TLabel")
-        self.project_backup_status_label.grid(row=0, column=0, sticky="w")
+        self._build_spacer_row(tab, 10)
+        self.project_backup_status_label = self._build_tab_footer(tab, 11)
 
     def _build_settings_tab(self, settings_tab) -> None:
         settings_tab.rowconfigure(5, weight=1)
@@ -940,6 +1032,8 @@ class ToolkitAssistantApp:
             sticky="e",
         )
 
+        self._build_spacer_row(settings_tab, 5)
+
         about_box = ttk.LabelFrame(settings_tab, text="About", padding=10, style="Accent.TLabelframe")
         about_box.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         about_box.columnconfigure(0, weight=1)
@@ -959,8 +1053,6 @@ class ToolkitAssistantApp:
             about_box,
             (
                 "Copyright © 2026 Luminiari. All rights reserved.\n"
-                "Licence: proprietary source-available.\nSource may be viewed and built "
-                "for personal use; reuse, redistribution, or forks require permission.\n"
                 "Lumi's Toolkit Assistant is an unofficial fan project. It is not endorsed "
                 "or approved by Larian Studios or Wizards of the Coast."
             ),
@@ -983,6 +1075,8 @@ class ToolkitAssistantApp:
             link.bind("<Button-1>", lambda _event, target=url: self._open_about_link(target))
             ToolTip(link, label)
 
+        self.settings_status_label = self._build_tab_footer(settings_tab, 7)
+
     def _browse_mesh_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Choose mesh file",
@@ -991,13 +1085,26 @@ class ToolkitAssistantApp:
         if path:
             self.mesh_file_path.set(path)
 
-    def _browse_auto_lsf(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Choose LSF file",
+    def _browse_auto_selected_lsfs(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Choose LSF files",
             filetypes=(("LSF files", "*.lsf"), ("All files", "*.*")),
         )
-        if path:
-            self.auto_lsf_path.set(path)
+        if not paths:
+            return
+
+        selected_paths: list[str] = []
+        seen: set[str] = set()
+        for path in paths:
+            key = str(Path(path).resolve()).lower()
+            if key in seen:
+                continue
+
+            seen.add(key)
+            selected_paths.append(path)
+
+        self.auto_selected_lsf_paths = selected_paths
+        self._update_auto_selected_lsf_summary()
 
     def _browse_auto_content_folder(self) -> None:
         path = filedialog.askdirectory(title="Choose Content folder")
@@ -1012,12 +1119,13 @@ class ToolkitAssistantApp:
         if path:
             self.patch_single_lsf_path.set(path)
 
-    def _set_window_icon(self) -> None:
+    def _set_window_icon(self, window=None) -> None:
         if not APP_ICON_PATH.is_file():
             return
 
+        target = window or self.root
         try:
-            self.root.iconbitmap(default=str(APP_ICON_PATH))
+            target.iconbitmap(default=str(APP_ICON_PATH))
         except tk.TclError:
             pass
 
@@ -1253,7 +1361,8 @@ class ToolkitAssistantApp:
         return True
 
     def _save_settings_clicked(self) -> None:
-        self._save_current_settings()
+        if self._save_current_settings():
+            self.settings_status_label.configure(text="Settings saved")
 
     def _open_settings_folder_clicked(self) -> None:
         settings_folder = SETTINGS_PATH.parent
@@ -1264,6 +1373,7 @@ class ToolkitAssistantApp:
                 os.startfile(str(settings_folder))  # type: ignore[attr-defined]
             else:
                 webbrowser.open(settings_folder.as_uri())
+            self.settings_status_label.configure(text="Settings folder opened")
         except Exception as exc:
             messagebox.showwarning(APP_TITLE, f"Could not open settings folder: {exc}")
 
@@ -1289,6 +1399,7 @@ class ToolkitAssistantApp:
             return
 
         messagebox.showinfo(APP_TITLE, f"Deleted {deleted} temporary item(s).")
+        self.settings_status_label.configure(text=f"Deleted {deleted} temporary item(s)")
 
     def _set_intro_preference_in_settings(self) -> None:
         self.settings[INTRO_DISMISSED_KEY] = "0" if self.show_intro_on_startup.get() else "1"
@@ -1350,32 +1461,48 @@ class ToolkitAssistantApp:
         return False
 
     def _activate_patch_lsf_output(self) -> None:
-        self.active_output_text = self.patch_output_text
+        self.active_output_name = "LSF Patcher"
         self.active_status_label = self.patch_status_label
 
     def _activate_mesh_bounds_output(self) -> None:
-        self.active_output_text = self.mesh_bounds_output_text
+        self.active_output_name = "Bounds Calculator"
         self.active_status_label = self.mesh_bounds_status_label
 
     def _activate_auto_bounds_output(self) -> None:
-        self.active_output_text = self.auto_output_text
+        self.active_output_name = "One-Click Patcher"
         self.active_status_label = self.auto_status_label
 
     def _activate_import_output(self) -> None:
-        self.active_output_text = self.import_output_text
+        self.active_output_name = "Import Repair"
         self.active_status_label = self.import_status_label
 
     def _activate_project_backup_output(self) -> None:
-        self.active_output_text = self.project_backup_output_text
+        self.active_output_name = "Project Tools"
         self.active_status_label = self.project_backup_status_label
 
+    def _update_auto_selected_lsf_summary(self) -> None:
+        count = len(self.auto_selected_lsf_paths)
+        if count == 0:
+            self.auto_selected_lsf_summary.set("No files selected")
+        elif count == 1:
+            self.auto_selected_lsf_summary.set("1 file selected")
+        else:
+            self.auto_selected_lsf_summary.set(f"{count} files selected")
+
+        listbox = getattr(self, "auto_selected_lsf_listbox", None)
+        if listbox is not None:
+            listbox.delete(0, "end")
+            for path in self.auto_selected_lsf_paths:
+                listbox.insert("end", Path(path).name)
+
     def _update_auto_bounds_mode(self) -> None:
-        if self.auto_bounds_mode.get() == "batch":
-            self.auto_single_target_frame.grid_remove()
+        mode = self.auto_bounds_mode.get()
+        if mode == "whole_folder":
+            self.auto_selected_target_frame.grid_remove()
             self.auto_batch_target_frame.grid()
         else:
             self.auto_batch_target_frame.grid_remove()
-            self.auto_single_target_frame.grid()
+            self.auto_selected_target_frame.grid()
 
     def _update_patch_lsf_mode(self) -> None:
         if self.patch_lsf_mode.get() == "uuid":
@@ -1445,7 +1572,43 @@ class ToolkitAssistantApp:
             messagebox.showwarning(APP_TITLE, str(exc))
             return
 
-        if mode == "batch":
+        if mode != "whole_folder":
+            selected_files = [path for path in self.auto_selected_lsf_paths if path.strip()]
+            if not selected_files:
+                messagebox.showwarning(APP_TITLE, "Select one or more .lsf files.")
+                return
+            invalid_file = next((path for path in selected_files if not Path(path).is_file()), None)
+            if invalid_file is not None:
+                messagebox.showwarning(APP_TITLE, f"Selected file no longer exists: {invalid_file}")
+                return
+            invalid_lsf = next((path for path in selected_files if Path(path).suffix.lower() != ".lsf"), None)
+            if invalid_lsf is not None:
+                messagebox.showwarning(APP_TITLE, f"Selected file must be an .lsf file: {invalid_lsf}")
+                return
+            confirmed = messagebox.askyesno(
+                APP_TITLE,
+                f"Patch {len(selected_files)} selected LSF file(s) now?",
+            )
+            if not confirmed:
+                return
+
+            self._clear_output()
+            self._set_running(True)
+            self.worker = threading.Thread(
+                target=self._run_auto_bounds_selected_patcher,
+                args=(
+                    selected_files,
+                    game_folder,
+                    divine,
+                    self.auto_keep_lsx.get(),
+                    self.auto_backup_original.get(),
+                ),
+                daemon=True,
+            )
+            self.worker.start()
+            return
+
+        if mode == "whole_folder":
             content_folder = self.auto_content_folder_path.get().strip()
             if not content_folder or not Path(content_folder).is_dir():
                 messagebox.showwarning(APP_TITLE, "Choose a valid Content folder.")
@@ -1472,30 +1635,6 @@ class ToolkitAssistantApp:
             )
             self.worker.start()
             return
-
-        lsf_file = self.auto_lsf_path.get().strip()
-        if not lsf_file or not Path(lsf_file).is_file():
-            messagebox.showwarning(APP_TITLE, "Choose a valid .lsf file.")
-            return
-        if Path(lsf_file).suffix.lower() != ".lsf":
-            messagebox.showwarning(APP_TITLE, "The selected file must be an .lsf file.")
-            return
-
-        self._clear_output()
-        self._set_running(True)
-
-        self.worker = threading.Thread(
-            target=self._run_auto_bounds_patcher,
-            args=(
-                lsf_file,
-                game_folder,
-                divine,
-                self.auto_keep_lsx.get(),
-                self.auto_backup_original.get(),
-            ),
-            daemon=True,
-        )
-        self.worker.start()
 
     def _start_patch_lsf_run(self) -> None:
         if self._is_busy():
@@ -1767,26 +1906,38 @@ class ToolkitAssistantApp:
         except Exception as exc:
             self.messages.put(("error", str(exc)))
 
-    def _run_auto_bounds_patcher(
+    def _run_auto_bounds_selected_patcher(
         self,
-        lsf_file: str,
+        lsf_files: list[str],
         game_folder: str,
         divine: str,
         keep_lsx: bool,
         backup_original: bool,
     ) -> None:
-        try:
-            updated = patch_lsf_from_related_mesh(
-                lsf_file,
-                game_folder,
-                divine or None,
-                keep_lsx=keep_lsx,
-                backup_original=backup_original,
-                progress=lambda message: self.messages.put(("log", message)),
-            )
+        updated = 0
+        failed = 0
+        total = len(lsf_files)
+        self.messages.put(("log", f"Selected file count: {total}\n"))
+        for index, lsf_file in enumerate(lsf_files, start=1):
+            self.messages.put(("log", f"\nSelected file {index}/{total}: {lsf_file}\n"))
+            try:
+                updated += patch_lsf_from_related_mesh(
+                    lsf_file,
+                    game_folder,
+                    divine or None,
+                    keep_lsx=keep_lsx,
+                    backup_original=backup_original,
+                    progress=lambda message: self.messages.put(("log", message)),
+                )
+            except Exception as exc:
+                failed += 1
+                self.messages.put(("log", f"Warning: Failed '{lsf_file}': {exc}\n"))
+
+        self.messages.put(("log", f"\nDone. Updated {updated} file(s). Failed {failed} file(s).\n"))
+        if updated == 0 and failed:
+            self.messages.put(("error", f"Failed to patch {failed} selected file(s). See log for details."))
+        else:
             self.messages.put(("done", updated))
-        except Exception as exc:
-            self.messages.put(("error", str(exc)))
 
     def _run_auto_bounds_batch_patcher(
         self,
@@ -1915,10 +2066,10 @@ class ToolkitAssistantApp:
                     self._append_output(f"\nGenerated bounds XML:\n{value}\n")
                 elif kind == "done":
                     self._set_running(False)
-                    self._append_output("\nComplete.\n")
+                    self._append_output("\nComplete.\n", "complete")
                     self._current_status_label().configure(text="Complete")
                 elif kind == "error":
-                    self._append_output(f"Error: {value}\n")
+                    self._append_output(f"Error: {value}\n", "error")
                     self._set_running(False)
                     self._current_status_label().configure(text="Failed")
         except queue.Empty:
@@ -1926,27 +2077,25 @@ class ToolkitAssistantApp:
 
         self.root.after(100, self._poll_messages)
 
-    def _append_output(self, text: str) -> None:
-        output = self._current_output_text()
+    def _append_output(self, text: str, tag: str | None = None) -> None:
+        self._ensure_console_window()
+        output = self.console_output_text
         output.configure(state="normal")
-        output.insert("end", text)
+        if tag is None:
+            output.insert("end", text)
+        else:
+            output.insert("end", text, tag)
         output.see("end")
         output.configure(state="disabled")
 
     def _clear_output(self) -> None:
-        output = self._current_output_text()
-        output.configure(state="normal")
-        output.delete("1.0", "end")
-        output.configure(state="disabled")
+        self._start_console_section()
 
     def _set_running(self, running: bool) -> None:
         for button in self.run_buttons:
             button.configure(state="disabled" if running else "normal")
         if running:
             self._current_status_label().configure(text="Running...")
-
-    def _current_output_text(self):
-        return self.active_output_text
 
     def _current_status_label(self):
         return self.active_status_label

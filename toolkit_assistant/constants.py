@@ -18,6 +18,7 @@ PACKAGED_RESOURCE_DIR = APP_DIR / "runtime"
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PACKAGED_RESOURCE_DIR if PACKAGED_RESOURCE_DIR.exists() else APP_DIR))
 VERSION_INFO_PATH = RESOURCE_DIR / "version_info.txt"
 APP_ICON_PATH = RESOURCE_DIR / "assets" / "ToolkitAssistant.ico"
+CONSOLE_ICON_PATH = RESOURCE_DIR / "assets" / "icon-console.png"
 SETTINGS_PATH = (
     Path(os.environ["APPDATA"]) / "ToolkitAssistant" / "settings.json"
     if os.environ.get("APPDATA")
