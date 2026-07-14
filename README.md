@@ -3,7 +3,7 @@ A small Windows helper for Baldur's Gate 3 Toolkit chores I got tired of doing b
 
 If you just want to use the thing and do not care how it works:
 
-* Download the latest build from the [Releases page](https://github.com/Luminiari/ToolkitAssistant/releases).
+* Download the latest build from the [Releases page](https://github.com/Luminiari/ToolkitAssistant/releases/latest).
 * Read the [project Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki) for instructions on tool operation, though I did try to make it as simple as possible ~~lol. lmao even~~.
 
 If you are here to look at the source or build it yourself, I am sorry for what I am about to do to your eyeballs.
@@ -98,7 +98,7 @@ with a release zip written to:
 ```text
 dist\ToolkitAssistant-v[VERSION].zip
 ```
-where [VERSION] comes from `version_info.txt`, so ideally I only have to remember one thing.
+where [VERSION] comes from `version_info.txt`, so ideally I only have to remember one thing because I am Big Stupid and have smol uwu brain.
 
 ## Local Settings
 
@@ -120,10 +120,16 @@ Backups are enabled by default for file replacement workflows. Keep them on unle
 
 How-to documentation belongs in the [Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki). It's already a meme that I like writing documentation but I also write too much so whatever.
 
+Generally recommend reading this regardless, especially [Safety Notes](https://github.com/Luminiari/ToolkitAssistant/wiki/So-you-wanna-use-my-little-tool#general-safety-notes). I use the term safety very heavy-handedly.
+
+## Acknowledgments
+
+Thanks to Norbyte for [LsLib](https://github.com/Norbyte/lslib).
+
 ## Licence
 
-Lumi's Toolkit Assistant uses a proprietary source-available licence. Source may be viewed and built for personal use, but reuse, redistribution, or forks require permission. See `LICENSE.md`.
+Lumi's Toolkit Assistant uses a proprietary source-available licence. Source may be viewed and built for personal use, but reuse, redistribution, or forks require permission. See [`LICENSE.md`](https://github.com/Luminiari/ToolkitAssistant?tab=License-1-ov-file).
 
 This is an unofficial fan project and is not endorsed by Larian Studios or Wizards of the Coast.
 
-**Support your local trans creators please and thank you.**
+<h1 align="center"><b>Support your local trans creators please and thank you. 🏳️‍⚧️</b></h1>
