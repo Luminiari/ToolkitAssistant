@@ -127,6 +127,7 @@ Generally recommend reading this regardless, especially [Safety Notes](https://g
 - Thanks to Norbyte for [LsLib](https://github.com/Norbyte/lslib).
 - Thanks to rdbende for the [Sun Valley ttk theme](https://github.com/rdbende/Sun-Valley-ttk-theme) I butchered under the MIT licence.
 - Thanks to everyone behind Python, Tkinter, and py2exe.
+- Thanks to [Rain](https://www.patreon.com/cw/Rain_A) for being my guinea pig (sorry).
 
 ## Licence
 
