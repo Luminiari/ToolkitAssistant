@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 import queue
@@ -20,8 +21,6 @@ from .bounds_patcher import (
 from .constants import (
     ABOUT_LINKS,
     ACCENT_COLOR,
-    ACCENT_DARK_COLOR,
-    ACCENT_LIGHT_COLOR,
     APP_HEADING,
     APP_ICON_PATH,
     APP_TITLE,
@@ -43,9 +42,22 @@ from .paths import get_game_folder_error
 from .project_tools import backup_toolkit_projects, find_toolkit_project_names, rename_toolkit_mod_project
 from .settings import load_settings, save_settings
 from .temp_files import delete_temp_folder_contents
+from .ui_theme import (
+    ACCENT_COLOR_SETTING_KEY,
+    UI_THEME_DARK,
+    UI_THEME_LIGHT,
+    UI_THEME_SETTING_KEY,
+    apply_lumi_accent,
+    derive_accent_palette,
+    normalize_accent_color,
+    normalize_ui_theme_name,
+    set_lumi_theme,
+    tint_accent_png,
+)
 
 
 tk = None
+colorchooser = None
 filedialog = None
 messagebox = None
 ttk = None
@@ -53,7 +65,7 @@ ttk = None
 
 def load_tk() -> None:
     # Lazy import keeps module loading boring when tests only need the helpers.
-    global tk, filedialog, messagebox, ttk
+    global tk, colorchooser, filedialog, messagebox, ttk
     if tk is not None:
         return
 
@@ -65,11 +77,13 @@ def load_tk() -> None:
         os.environ.setdefault("TK_LIBRARY", str(tk_dir))
 
     import tkinter as tk_module
+    from tkinter import colorchooser as colorchooser_module
     from tkinter import filedialog as filedialog_module
     from tkinter import messagebox as messagebox_module
     from tkinter import ttk as ttk_module
 
     tk = tk_module
+    colorchooser = colorchooser_module
     filedialog = filedialog_module
     messagebox = messagebox_module
     ttk = ttk_module
@@ -116,15 +130,20 @@ class ToolkitAssistantApp:
     def __init__(self) -> None:
         set_windows_app_user_model_id()
         load_tk()
+        self.settings = load_settings()
+        self.ui_theme_name = normalize_ui_theme_name(self.settings.get(UI_THEME_SETTING_KEY, UI_THEME_LIGHT))
+        self._set_accent_palette(self.settings.get(ACCENT_COLOR_SETTING_KEY, ACCENT_COLOR))
         self.root = tk.Tk()
 
         self.root.title(APP_TITLE)
         self._set_window_icon()
         self.root.geometry("760x560")
         self.root.minsize(760, 560)
+        self.lumi_theme_loaded = set_lumi_theme(self.root, ttk, self.ui_theme_name)
+        if self.lumi_theme_loaded:
+            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
         self._configure_styles()
 
-        self.settings = load_settings()
         self.mesh_file_path = tk.StringVar(master=self.root)
         self.auto_bounds_mode = tk.StringVar(master=self.root, value="batch")
         self.auto_selected_lsf_summary = tk.StringVar(master=self.root, value="No files selected")
@@ -160,6 +179,7 @@ class ToolkitAssistantApp:
             master=self.root,
             value=self.settings.get(INTRO_DISMISSED_KEY) != "1",
         )
+        self.dark_mode = tk.BooleanVar(master=self.root, value=self.ui_theme_name == UI_THEME_DARK)
 
         self.messages: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.worker: threading.Thread | None = None
@@ -167,14 +187,22 @@ class ToolkitAssistantApp:
         self.active_output_name = ""
         self.active_status_label = None
         self.about_link_icons: list[object] = []
+        self.about_link_icon_labels: list[tuple[object, str]] = []
         self.console_icon = None
         self.console_output_text = None
         self.console_toggle_buttons: list[object] = []
         self.console_window = None
         self.intro_window = None
         self.latest_mesh_bounds_xml = ""
+        self.pending_theme_after = None
+        self.accent_bar = None
+        self.accent_swatch = None
+        self.direct_accent_labels: list[object] = []
+        self.tinted_icon_cache: dict[tuple[str, str, int | None], object] = {}
 
         self._build_ui()
+        self._apply_plain_widget_theme()
+        self.root.after_idle(self._refresh_app_styles)
         if self.settings.get(INTRO_DISMISSED_KEY) != "1":
             self.root.after(250, self._show_intro_dialog)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -183,28 +211,206 @@ class ToolkitAssistantApp:
     def mainloop(self) -> None:
         self.root.mainloop()
 
+    def _set_accent_palette(self, accent_color: object) -> None:
+        palette = derive_accent_palette(normalize_accent_color(accent_color))
+        self.accent_color = palette["accent"]
+        self.accent_dark_color = palette["dark"]
+        self.accent_light_color = palette["light"]
+        self.accent_foreground_color = palette["foreground"]
+
+    def _apply_ui_theme(self) -> None:
+        self.lumi_theme_loaded = set_lumi_theme(self.root, ttk, self.ui_theme_name)
+        if self.lumi_theme_loaded:
+            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
+        self._refresh_app_styles()
+
+    def _set_root_redraw_enabled(self, enabled: bool) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            hwnd = self.root.winfo_id()
+            ctypes.windll.user32.SendMessageW(hwnd, 0x000B, int(enabled), 0)
+            if enabled:
+                ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0185)
+        except Exception:
+            pass
+
+    def _refresh_app_styles(self) -> None:
+        self._configure_styles()
+        self._apply_plain_widget_theme()
+        self._update_accent_widgets()
+
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
-        style.configure("Accent.TLabel", foreground=ACCENT_COLOR)
-        style.configure("Title.TLabel", foreground=ACCENT_COLOR, font=("", 15, "bold"))
-        style.configure("SplashTitle.TLabel", foreground=ACCENT_COLOR, font=("", 18, "bold"))
-        style.configure("SplashSubtitle.TLabel", foreground="#444444", font=("", 10))
-        style.configure("AboutTitle.TLabel", foreground=ACCENT_COLOR, font=("", 10, "bold"))
-        style.configure("AboutVersion.TLabel", font=("", 9, "bold"))
-        style.configure("Accent.TLabelframe.Label", foreground=ACCENT_COLOR)
-        style.configure("Warning.TLabelframe.Label", foreground=ACCENT_COLOR, font=("", 9, "bold"))
-        style.configure("Accent.TButton", foreground=ACCENT_COLOR)
-        style.map("Accent.TButton", foreground=[("active", ACCENT_DARK_COLOR), ("disabled", "#808080")])
+        dark_theme = self.lumi_theme_loaded and self.ui_theme_name == UI_THEME_DARK
+        subtitle_color = "#d0d0d0" if dark_theme else "#444444"
 
+        self._configure_accent_label_style(style, "Accent.TLabel")
+        self._configure_accent_label_style(style, "Title.TLabel", font=("", 15, "bold"))
+        self._configure_accent_label_style(style, "SplashTitle.TLabel", font=("", 18, "bold"))
+        style.configure("SplashSubtitle.TLabel", foreground=subtitle_color, font=("", 10))
+        self._configure_accent_label_style(style, "AboutTitle.TLabel", font=("", 10, "bold"))
+        style.configure("AboutVersion.TLabel", font=("", 9, "bold"))
+        self._configure_accent_label_style(style, "Accent.TLabelframe.Label")
+        self._configure_accent_label_style(style, "Warning.TLabelframe.Label", font=("", 9, "bold"))
         try:
-            style.configure("TNotebook.Tab", padding=(12, 5))
+            style.configure(
+                ".",
+                focuscolor=self.accent_color,
+                selectbackground=self.accent_color,
+                selectforeground=self.accent_foreground_color,
+            )
             style.map(
-                "TNotebook.Tab",
-                foreground=[("selected", ACCENT_COLOR)],
-                background=[("selected", ACCENT_LIGHT_COLOR)],
+                "TCombobox",
+                selectbackground=[("readonly", self.accent_color)],
+                selectforeground=[("readonly", self.accent_foreground_color)],
             )
         except tk.TclError:
             pass
+        if self.lumi_theme_loaded:
+            style.configure("Accent.TButton", foreground=self.accent_foreground_color)
+            style.map("Accent.TButton", foreground=[("pressed", self.accent_light_color), ("disabled", "#a5a5a5")])
+        else:
+            style.configure("Accent.TButton", foreground=self.accent_color)
+            style.map("Accent.TButton", foreground=[("active", self.accent_dark_color), ("disabled", "#808080")])
+
+        try:
+            style.configure("TNotebook.Tab", padding=(8, 3) if self.lumi_theme_loaded else (12, 5))
+            if self.lumi_theme_loaded:
+                style.map("TNotebook.Tab", foreground=[("selected", self.accent_color)])
+            else:
+                style.map(
+                    "TNotebook.Tab",
+                    foreground=[("selected", self.accent_color)],
+                    background=[("selected", self.accent_light_color)],
+                )
+        except tk.TclError:
+            pass
+
+    def _configure_accent_label_style(self, style, style_name: str, *, font=None) -> None:
+        options = {"foreground": self.accent_color}
+        if font is not None:
+            options["font"] = font
+        style.configure(style_name, **options)
+        style.map(
+            style_name,
+            foreground=[
+                ("disabled", self.accent_dark_color),
+                ("!disabled", self.accent_color),
+            ],
+        )
+
+    def _apply_plain_widget_theme(self) -> None:
+        if self.ui_theme_name == UI_THEME_DARK and self.lumi_theme_loaded:
+            colors = {
+                "background": "#252525",
+                "foreground": "#fafafa",
+                "insertbackground": "#fafafa",
+                "selectbackground": self.accent_color,
+                "selectforeground": self.accent_foreground_color,
+            }
+        else:
+            colors = {
+                "background": "#ffffff",
+                "foreground": "#000000",
+                "insertbackground": "#000000",
+                "selectbackground": self.accent_color,
+                "selectforeground": self.accent_foreground_color,
+            }
+
+        for widget_name in ("patch_uuid_text", "patch_bounds_text"):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.configure(**colors)
+
+        listbox = getattr(self, "auto_selected_lsf_listbox", None)
+        if listbox is not None:
+            listbox.configure(
+                background=colors["background"],
+                foreground=colors["foreground"],
+                selectbackground=colors["selectbackground"],
+                selectforeground=colors["selectforeground"],
+            )
+
+    def _update_accent_widgets(self) -> None:
+        if self.accent_bar is not None:
+            self.accent_bar.configure(bg=self.accent_color)
+
+        if self.accent_swatch is not None:
+            self.accent_swatch.configure(bg=self.accent_color, highlightbackground=self.accent_dark_color)
+
+        for label in self.direct_accent_labels:
+            try:
+                if label.winfo_exists():
+                    label.configure(foreground=self.accent_color)
+            except tk.TclError:
+                pass
+
+        if self.console_output_text is not None:
+            self.console_output_text.tag_configure("section", foreground=self.accent_light_color)
+
+    def _set_accent_color(self, accent_color: object, *, save: bool = True) -> None:
+        normalized_color = normalize_accent_color(accent_color)
+        if normalized_color == self.accent_color:
+            return
+
+        self._set_accent_palette(normalized_color)
+        self.settings[ACCENT_COLOR_SETTING_KEY] = self.accent_color
+        if self.lumi_theme_loaded:
+            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
+        self._refresh_tinted_icons()
+        self._refresh_app_styles()
+        self.root.after_idle(self._refresh_app_styles)
+        if save:
+            self._save_accent_preference()
+
+    def _choose_accent_color(self) -> None:
+        _rgb, selected_color = colorchooser.askcolor(
+            color=self.accent_color,
+            parent=self.root,
+            title="Choose accent colour",
+        )
+        if selected_color:
+            self._set_accent_color(selected_color)
+            if hasattr(self, "settings_status_label"):
+                self.settings_status_label.configure(text="Accent colour updated")
+
+    def _reset_accent_color(self) -> None:
+        self._set_accent_color(ACCENT_COLOR)
+        if hasattr(self, "settings_status_label"):
+            self.settings_status_label.configure(text="Accent colour reset")
+
+    def _save_accent_preference(self) -> None:
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            messagebox.showwarning(APP_TITLE, f"Could not save accent colour: {exc}")
+
+    def _refresh_tinted_icons(self) -> None:
+        self.tinted_icon_cache.clear()
+        self.about_link_icons.clear()
+        self.console_icon = None
+
+        console_icon = self._load_console_icon()
+        if console_icon is not None:
+            for label in self.console_toggle_buttons:
+                try:
+                    if label.winfo_exists():
+                        label.configure(image=console_icon)
+                except tk.TclError:
+                    pass
+
+        for label, icon_name in self.about_link_icon_labels:
+            icon = self._load_about_icon(icon_name)
+            if icon is None:
+                continue
+            try:
+                if label.winfo_exists():
+                    label.configure(image=icon)
+            except tk.TclError:
+                pass
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, padding=14)
@@ -217,18 +423,20 @@ class ToolkitAssistantApp:
         header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         header.columnconfigure(0, weight=1)
 
-        title = ttk.Label(header, text=APP_HEADING, style="Title.TLabel")
+        title = ttk.Label(header, text=APP_HEADING, style="Title.TLabel", foreground=self.accent_color)
+        self.direct_accent_labels.append(title)
         title.grid(row=0, column=0, sticky="w")
         self._build_console_toggle(header).grid(row=0, column=1, sticky="e")
 
-        accent_bar = tk.Frame(outer, height=3, bg=ACCENT_COLOR)
+        accent_bar = tk.Frame(outer, height=3, bg=self.accent_color)
+        self.accent_bar = accent_bar
         accent_bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
         notebook = ttk.Notebook(outer)
         notebook.grid(row=2, column=0, sticky="nsew")
         self.main_notebook = notebook
 
-        bounds_tab = ttk.Frame(notebook, padding=10)
+        bounds_tab = ttk.Frame(notebook, padding=(10, 1, 10, 10))
         import_tab = ttk.Frame(notebook, padding=10)
         project_backup_tab = ttk.Frame(notebook, padding=10)
         settings_tab = ttk.Frame(notebook, padding=10)
@@ -402,6 +610,33 @@ class ToolkitAssistantApp:
         ToolTip(console_toggle, "Show or hide log")
         return console_toggle
 
+    def _load_tinted_icon(self, filename: str, *, target_size: int | None = None):
+        cache_key = (filename, self.accent_color, target_size)
+        cached_icon = self.tinted_icon_cache.get(cache_key)
+        if cached_icon is not None:
+            return cached_icon
+
+        path = RESOURCE_DIR / "assets" / filename
+        if not path.is_file():
+            return None
+
+        try:
+            icon_data = path.read_bytes()
+            if self.accent_color != normalize_accent_color(ACCENT_COLOR):
+                icon_data = tint_accent_png(icon_data, self.accent_color)
+            encoded_icon = base64.b64encode(icon_data).decode("ascii")
+            icon = tk.PhotoImage(master=self.root, data=encoded_icon, format="png")
+        except (OSError, tk.TclError):
+            return None
+
+        if target_size is not None:
+            factor = max(icon.width() // target_size, icon.height() // target_size, 1)
+            if factor > 1:
+                icon = icon.subsample(factor, factor)
+
+        self.tinted_icon_cache[cache_key] = icon
+        return icon
+
     def _build_tab_footer(self, tab, row: int, *, columnspan: int = 3):
         footer = ttk.Frame(tab)
         footer.grid(row=row, column=0, columnspan=columnspan, sticky="sew")
@@ -416,19 +651,7 @@ class ToolkitAssistantApp:
     def _load_console_icon(self):
         if self.console_icon is not None:
             return self.console_icon
-        if not CONSOLE_ICON_PATH.is_file():
-            return None
-
-        try:
-            icon = tk.PhotoImage(file=str(CONSOLE_ICON_PATH))
-        except tk.TclError:
-            return None
-
-        target_size = 16
-        factor = max(icon.width() // target_size, icon.height() // target_size, 1)
-        if factor > 1:
-            icon = icon.subsample(factor, factor)
-        self.console_icon = icon
+        self.console_icon = self._load_tinted_icon(CONSOLE_ICON_PATH.name, target_size=16)
         return self.console_icon
 
     def _ensure_console_window(self) -> None:
@@ -830,7 +1053,9 @@ class ToolkitAssistantApp:
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(10, weight=1)
 
-        ttk.Label(tab, text="Rename Mod", style="AboutTitle.TLabel").grid(
+        rename_heading = ttk.Label(tab, text="Rename Mod", style="AboutTitle.TLabel", foreground=self.accent_color)
+        self.direct_accent_labels.append(rename_heading)
+        rename_heading.grid(
             row=0,
             column=0,
             columnspan=3,
@@ -885,7 +1110,9 @@ class ToolkitAssistantApp:
             pady=(14, 12),
         )
 
-        ttk.Label(tab, text="Project Backup", style="AboutTitle.TLabel").grid(
+        backup_heading = ttk.Label(tab, text="Project Backup", style="AboutTitle.TLabel", foreground=self.accent_color)
+        self.direct_accent_labels.append(backup_heading)
+        backup_heading.grid(
             row=6,
             column=0,
             columnspan=3,
@@ -951,7 +1178,7 @@ class ToolkitAssistantApp:
         self.project_backup_status_label = self._build_tab_footer(tab, 11)
 
     def _build_settings_tab(self, settings_tab) -> None:
-        settings_tab.rowconfigure(5, weight=1)
+        settings_tab.rowconfigure(7, weight=1)
 
         ttk.Label(settings_tab, text="Game folder").grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Entry(settings_tab, textvariable=self.game_folder_path).grid(
@@ -996,8 +1223,34 @@ class ToolkitAssistantApp:
             command=self._save_intro_preference,
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 0))
 
+        ttk.Checkbutton(
+            settings_tab,
+            text="Dark mode",
+            variable=self.dark_mode,
+            command=self._toggle_dark_mode,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        ttk.Label(settings_tab, text="Accent colour").grid(row=5, column=0, sticky="w", padx=(0, 8), pady=(10, 0))
+        accent_controls = ttk.Frame(settings_tab)
+        accent_controls.grid(row=5, column=1, columnspan=2, sticky="ew", pady=(10, 0))
+        accent_controls.columnconfigure(2, weight=1)
+        self.accent_swatch = tk.Frame(
+            accent_controls,
+            width=24,
+            height=18,
+            bg=self.accent_color,
+            cursor="hand2",
+            highlightbackground=self.accent_dark_color,
+            highlightthickness=1,
+        )
+        self.accent_swatch.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.accent_swatch.grid_propagate(False)
+        self.accent_swatch.bind("<Button-1>", lambda _event: self._choose_accent_color())
+        ToolTip(self.accent_swatch, "Choose accent colour")
+        ttk.Button(accent_controls, text="Reset", command=self._reset_accent_color).grid(row=0, column=1, sticky="w")
+
         settings_footer = ttk.Frame(settings_tab)
-        settings_footer.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        settings_footer.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
         settings_footer.columnconfigure(2, weight=1)
 
         ttk.Button(
@@ -1032,13 +1285,20 @@ class ToolkitAssistantApp:
             sticky="e",
         )
 
-        self._build_spacer_row(settings_tab, 5)
+        self._build_spacer_row(settings_tab, 7)
 
         about_box = ttk.LabelFrame(settings_tab, text="About", padding=10, style="Accent.TLabelframe")
-        about_box.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        about_box.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         about_box.columnconfigure(0, weight=1)
 
-        ttk.Label(about_box, text="Developed by Luminiari, powered by coffee and bagels.", style="AboutTitle.TLabel").grid(
+        about_heading = ttk.Label(
+            about_box,
+            text="Developed by Luminiari, powered by coffee and bagels.",
+            style="AboutTitle.TLabel",
+            foreground=self.accent_color,
+        )
+        self.direct_accent_labels.append(about_heading)
+        about_heading.grid(
             row=0,
             column=0,
             sticky="w",
@@ -1070,12 +1330,13 @@ class ToolkitAssistantApp:
                 link = ttk.Label(link_row, text=label, cursor="hand2", padding=(4, 2))
             else:
                 link = ttk.Label(link_row, image=icon, cursor="hand2", padding=2)
+                self.about_link_icon_labels.append((link, icon_name))
 
             link.grid(row=0, column=index + 1, padx=5)
             link.bind("<Button-1>", lambda _event, target=url: self._open_about_link(target))
             ToolTip(link, label)
 
-        self.settings_status_label = self._build_tab_footer(settings_tab, 7)
+        self.settings_status_label = self._build_tab_footer(settings_tab, 9)
 
     def _browse_mesh_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1348,6 +1609,8 @@ class ToolkitAssistantApp:
 
         self.settings["divine_path"] = divine
         self.settings["game_folder_path"] = game_folder
+        self.settings[UI_THEME_SETTING_KEY] = self.ui_theme_name
+        self.settings[ACCENT_COLOR_SETTING_KEY] = self.accent_color
         if game_folder != previous_game_folder:
             self.project_backup_selected_projects = []
             self._update_project_backup_selection_summary()
@@ -1359,6 +1622,29 @@ class ToolkitAssistantApp:
             return False
 
         return True
+
+    def _toggle_dark_mode(self) -> None:
+        self.ui_theme_name = UI_THEME_DARK if self.dark_mode.get() else UI_THEME_LIGHT
+        self.settings[UI_THEME_SETTING_KEY] = self.ui_theme_name
+        if self.pending_theme_after is not None:
+            self.root.after_cancel(self.pending_theme_after)
+        self.pending_theme_after = self.root.after_idle(self._apply_and_save_ui_theme)
+
+    def _apply_and_save_ui_theme(self) -> None:
+        self.pending_theme_after = None
+        self._set_root_redraw_enabled(False)
+        try:
+            self._apply_ui_theme()
+            self.root.update_idletasks()
+        finally:
+            self._set_root_redraw_enabled(True)
+        self.root.after(50, self._save_theme_preference)
+
+    def _save_theme_preference(self) -> None:
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            messagebox.showwarning(APP_TITLE, f"Could not save theme preference: {exc}")
 
     def _save_settings_clicked(self) -> None:
         if self._save_current_settings():
@@ -1425,15 +1711,9 @@ class ToolkitAssistantApp:
             messagebox.showwarning(APP_TITLE, f"Could not open link: {exc}")
 
     def _load_about_icon(self, filename: str):
-        path = RESOURCE_DIR / "assets" / filename
-        if not path.is_file():
+        icon = self._load_tinted_icon(filename)
+        if icon is None:
             return None
-
-        try:
-            icon = tk.PhotoImage(file=str(path))
-        except tk.TclError:
-            return None
-
         self.about_link_icons.append(icon)
         return icon
 

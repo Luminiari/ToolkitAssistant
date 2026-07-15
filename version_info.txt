@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2026, 7, 14, 0),
-    prodvers=(2026, 7, 14, 0),
+    filevers=(2026, 7, 15, 0),
+    prodvers=(2026, 7, 15, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct("CompanyName", "Luminiari"),
           StringStruct("FileDescription", "y u no let me add bounds in toolkit larian"),
-          StringStruct("FileVersion", "2026.7.14.0"),
+          StringStruct("FileVersion", "2026.7.15.0"),
           StringStruct("InternalName", "ToolkitAssistant"),
           StringStruct("LegalCopyright", "Copyright (c) 2026 Luminiari. All rights reserved."),
           StringStruct("OriginalFilename", "ToolkitAssistant.exe"),
           StringStruct("ProductName", "Lumi's Toolkit Assistant"),
-          StringStruct("ProductVersion", "2026.7.14.0"),
+          StringStruct("ProductVersion", "2026.7.15.0"),
         ],
       )
     ]),

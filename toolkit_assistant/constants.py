@@ -19,6 +19,7 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PACKAGED_RESOURCE_DIR if PACKAGED_R
 VERSION_INFO_PATH = RESOURCE_DIR / "version_info.txt"
 APP_ICON_PATH = RESOURCE_DIR / "assets" / "ToolkitAssistant.ico"
 CONSOLE_ICON_PATH = RESOURCE_DIR / "assets" / "icon-console.png"
+LUMI_SUN_VALLEY_THEME_PATH = RESOURCE_DIR / "assets" / "lumi-sun-valley-theme" / "lumi_sv.tcl"
 SETTINGS_PATH = (
     Path(os.environ["APPDATA"]) / "ToolkitAssistant" / "settings.json"
     if os.environ.get("APPDATA")
