@@ -37,6 +37,7 @@ from .mesh_bounds import (
     calculate_mesh_bounds,
     collect_collada_node_positions,
     collect_position_sources_from_vertices,
+    convert_position_to_visualbank_space,
     format_float,
     format_mesh_bounds_xml,
     format_vec3,
@@ -56,6 +57,7 @@ from .mesh_bounds import (
     read_collada_positions,
     read_collada_uninstanced_positions,
     transform_point,
+    VISUALBANK_X_OFFSET,
 )
 from .models import BoundsPayload, ImportSourceRepair, LsfBatchTarget, MeshBounds, MeshReference, ProjectBackupCopy
 from .paths import get_game_folder_error, is_path_within

@@ -19,6 +19,9 @@ from .xml_utils import (
 )
 
 
+VISUALBANK_X_OFFSET = 0.14
+
+
 def calculate_mesh_bounds(
     mesh_file: str | Path,
     divine_path: str | Path | None = None,
@@ -47,9 +50,14 @@ def calculate_mesh_bounds(
         return calculate_collada_bounds(dae_path)
 
 def calculate_collada_bounds(dae_path: Path) -> MeshBounds:
-    positions = read_collada_positions(dae_path)
-    if not positions:
+    collada_positions = read_collada_positions(dae_path)
+    if not collada_positions:
         raise ValueError(f"No mesh position vertices were found in: {dae_path}")
+
+    # Divine has already converted the GR2 positions to the Y-up coordinates
+    # expected by VisualBank. Match the Blender bounds helper's remaining
+    # adjustment by shifting both X bounds by its fixed 0.14-unit offset.
+    positions = [convert_position_to_visualbank_space(position) for position in collada_positions]
 
     min_x = min(position[0] for position in positions)
     min_y = min(position[1] for position in positions)
@@ -66,6 +74,13 @@ def calculate_collada_bounds(dae_path: Path) -> MeshBounds:
     half_z = (max_z - min_z) / 2
     radius = (half_x * half_x + half_y * half_y + half_z * half_z) ** 0.5
     return MeshBounds(minimum=minimum, maximum=maximum, center=center, radius=radius, vertex_count=len(positions))
+
+def convert_position_to_visualbank_space(
+    position: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Apply the VisualBank X offset used by the Blender bounds helper."""
+    x, y, z = position
+    return (x - VISUALBANK_X_OFFSET, y, z)
 
 def read_collada_positions(dae_path: Path) -> list[tuple[float, float, float]]:
     tree = ET.parse(dae_path)
@@ -277,7 +292,12 @@ def identity_matrix() -> tuple[float, ...]:
     )
 
 def parse_matrix_values(text: str) -> tuple[float, ...]:
-    return tuple(parse_float_values(text, expected=16, label="matrix"))
+    values = parse_float_values(text, expected=16, label="matrix")
+
+    # COLLADA serializes matrices column-major.  The helpers in this module
+    # operate on row-major tuples and column vectors, so transpose while
+    # parsing rather than silently putting translation in the final row.
+    return tuple(values[column * 4 + row] for row in range(4) for column in range(4))
 
 def parse_translate_values(text: str) -> tuple[float, ...]:
     values = parse_float_values(text, expected=3, label="translate")
