@@ -1,5 +1,3 @@
-"""XML helpers for LSX, import settings, and Collada files."""
-
 from __future__ import annotations
 
 import hashlib

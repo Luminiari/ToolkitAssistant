@@ -1,5 +1,3 @@
-"""Mesh bounds calculation for GR2 and Collada files."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -54,9 +52,6 @@ def calculate_collada_bounds(dae_path: Path) -> MeshBounds:
     if not collada_positions:
         raise ValueError(f"No mesh position vertices were found in: {dae_path}")
 
-    # Divine has already converted the GR2 positions to the Y-up coordinates
-    # expected by VisualBank. Match the Blender bounds helper's remaining
-    # adjustment by shifting both X bounds by its fixed 0.14-unit offset.
     positions = [convert_position_to_visualbank_space(position) for position in collada_positions]
 
     min_x = min(position[0] for position in positions)
@@ -78,7 +73,6 @@ def calculate_collada_bounds(dae_path: Path) -> MeshBounds:
 def convert_position_to_visualbank_space(
     position: tuple[float, float, float],
 ) -> tuple[float, float, float]:
-    """Apply the VisualBank X offset used by the Blender bounds helper."""
     x, y, z = position
     return (x - VISUALBANK_X_OFFSET, y, z)
 
@@ -294,9 +288,6 @@ def identity_matrix() -> tuple[float, ...]:
 def parse_matrix_values(text: str) -> tuple[float, ...]:
     values = parse_float_values(text, expected=16, label="matrix")
 
-    # COLLADA serializes matrices column-major.  The helpers in this module
-    # operate on row-major tuples and column vectors, so transpose while
-    # parsing rather than silently putting translation in the final row.
     return tuple(values[column * 4 + row] for row in range(4) for column in range(4))
 
 def parse_translate_values(text: str) -> tuple[float, ...]:

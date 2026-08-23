@@ -1,8 +1,6 @@
-"""Run Toolkit Assistant as a module."""
-
 from __future__ import annotations
 
-from .app import main
+from .lumi_app import main
 
 
 if __name__ == "__main__":

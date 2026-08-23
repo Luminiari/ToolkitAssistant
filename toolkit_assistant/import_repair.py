@@ -1,5 +1,3 @@
-"""Import settings XML repair workflow."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -19,7 +17,6 @@ def repair_import_settings_sources(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Repair Toolkit import settings XML source paths rewritten to absolute Data/ASSETS paths."""
 
     log = progress or (lambda message: None)
     root_path = Path(xml_root).resolve()

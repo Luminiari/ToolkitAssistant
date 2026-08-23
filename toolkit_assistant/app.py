@@ -1,14 +1,13 @@
-"""Tkinter user interface for Toolkit Assistant."""
-
 from __future__ import annotations
 
-import base64
 import os
 from pathlib import Path
 import queue
 import sys
 import threading
 import webbrowser
+
+from luminiari_ui import LumiToolTip
 
 from .bounds_patcher import (
     parse_uuid_values,
@@ -21,38 +20,32 @@ from .bounds_patcher import (
 from .constants import (
     ABOUT_LINKS,
     ACCENT_COLOR,
-    APP_HEADING,
-    APP_ICON_PATH,
     APP_TITLE,
     APP_VERSION,
     CONSOLE_ICON_PATH,
+    EXPERIMENTAL_FEATURES_UNLOCKED_KEY,
     INTRO_DISMISSED_KEY,
-    LSLIB_RELEASES_URL,
     RESOURCE_DIR,
     SETTINGS_PATH,
     TEMPORARY_FILES_ROOT,
     TEMPORARY_RENAME_BACKUP_RETENTION_DAYS,
     TEMPORARY_RENAME_BACKUP_ROOT,
-    TOOLKIT_ASSISTANT_WIKI_URL,
 )
-from .divine import find_default_divine, resolve_divine
+from .divine import resolve_divine
 from .import_repair import repair_import_settings_sources
 from .mesh_bounds import calculate_mesh_bounds, format_mesh_bounds_xml
+from .pak_finalisation import default_finalised_pak_path, finalise_pak
 from .paths import get_game_folder_error
-from .project_tools import backup_toolkit_projects, find_toolkit_project_names, rename_toolkit_mod_project
-from .settings import load_settings, save_settings
+from .project_tools import backup_toolkit_projects, rename_toolkit_mod_project
+from .settings import save_settings
 from .temp_files import delete_temp_folder_contents
 from .ui_theme import (
     ACCENT_COLOR_SETTING_KEY,
     UI_THEME_DARK,
     UI_THEME_LIGHT,
     UI_THEME_SETTING_KEY,
-    apply_lumi_accent,
     derive_accent_palette,
     normalize_accent_color,
-    normalize_ui_theme_name,
-    set_lumi_theme,
-    tint_accent_png,
 )
 
 
@@ -64,7 +57,6 @@ ttk = None
 
 
 def load_tk() -> None:
-    # Lazy import keeps module loading boring when tests only need the helpers.
     global tk, colorchooser, filedialog, messagebox, ttk
     if tk is not None:
         return
@@ -88,125 +80,7 @@ def load_tk() -> None:
     messagebox = messagebox_module
     ttk = ttk_module
 
-def set_windows_app_user_model_id() -> None:
-    if sys.platform != "win32":
-        return
-
-    try:
-        import ctypes
-
-        # Stop whining and do the thing.
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ToolkitAssistant.ToolkitAssistant")
-    except Exception:
-        pass
-
-class ToolTip:
-    def __init__(self, widget, text: str) -> None:
-        self.widget = widget
-        self.text = text
-        self.window = None
-        widget.bind("<Enter>", self.show)
-        widget.bind("<Leave>", self.hide)
-        widget.bind("<ButtonPress>", self.hide)
-
-    def show(self, _event=None) -> None:
-        if self.window is not None or not self.text:
-            return
-
-        x = self.widget.winfo_rootx() + 18
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
-        self.window = tk.Toplevel(self.widget)
-        self.window.wm_overrideredirect(True)
-        self.window.wm_geometry(f"+{x}+{y}")
-        label = ttk.Label(self.window, text=self.text, padding=(6, 3), relief="solid", borderwidth=1)
-        label.pack()
-
-    def hide(self, _event=None) -> None:
-        if self.window is not None:
-            self.window.destroy()
-            self.window = None
-
 class ToolkitAssistantApp:
-    def __init__(self) -> None:
-        set_windows_app_user_model_id()
-        load_tk()
-        self.settings = load_settings()
-        self.ui_theme_name = normalize_ui_theme_name(self.settings.get(UI_THEME_SETTING_KEY, UI_THEME_LIGHT))
-        self._set_accent_palette(self.settings.get(ACCENT_COLOR_SETTING_KEY, ACCENT_COLOR))
-        self.root = tk.Tk()
-
-        self.root.title(APP_TITLE)
-        self._set_window_icon()
-        self.root.geometry("760x560")
-        self.root.minsize(760, 560)
-        self.lumi_theme_loaded = set_lumi_theme(self.root, ttk, self.ui_theme_name)
-        if self.lumi_theme_loaded:
-            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
-        self._configure_styles()
-
-        self.mesh_file_path = tk.StringVar(master=self.root)
-        self.auto_bounds_mode = tk.StringVar(master=self.root, value="batch")
-        self.auto_selected_lsf_summary = tk.StringVar(master=self.root, value="No files selected")
-        self.auto_selected_lsf_paths: list[str] = []
-        self.auto_content_folder_path = tk.StringVar(master=self.root)
-        self.patch_lsf_mode = tk.StringVar(master=self.root, value="single")
-        self.patch_single_lsf_path = tk.StringVar(master=self.root)
-        self.patch_batch_root_path = tk.StringVar(master=self.root)
-        self.divine_path = tk.StringVar(
-            master=self.root,
-            value=self.settings.get("divine_path") or find_default_divine(),
-        )
-        self.game_folder_path = tk.StringVar(
-            master=self.root,
-            value=self.settings.get("game_folder_path", ""),
-        )
-        self.auto_keep_lsx = tk.BooleanVar(master=self.root, value=True)
-        self.auto_backup_original = tk.BooleanVar(master=self.root, value=True)
-        self.patch_lsf_keep_lsx = tk.BooleanVar(master=self.root, value=True)
-        self.patch_lsf_backup_original = tk.BooleanVar(master=self.root, value=True)
-        self.import_root_path = tk.StringVar(master=self.root)
-        self.import_backup_original = tk.BooleanVar(master=self.root, value=True)
-        self.rename_old_folder = tk.StringVar(master=self.root)
-        self.rename_new_folder = tk.StringVar(master=self.root)
-        self.project_backup_path = tk.StringVar(
-            master=self.root,
-            value=self.settings.get("project_backup_path", ""),
-        )
-        self.project_backup_selection_text = tk.StringVar(master=self.root, value="No projects selected")
-        self.project_backup_selected_projects: list[str] = []
-        self.project_picker_window = None
-        self.show_intro_on_startup = tk.BooleanVar(
-            master=self.root,
-            value=self.settings.get(INTRO_DISMISSED_KEY) != "1",
-        )
-        self.dark_mode = tk.BooleanVar(master=self.root, value=self.ui_theme_name == UI_THEME_DARK)
-
-        self.messages: queue.Queue[tuple[str, str | int]] = queue.Queue()
-        self.worker: threading.Thread | None = None
-        self.run_buttons: list[object] = []
-        self.active_output_name = ""
-        self.active_status_label = None
-        self.about_link_icons: list[object] = []
-        self.about_link_icon_labels: list[tuple[object, str]] = []
-        self.console_icon = None
-        self.console_output_text = None
-        self.console_toggle_buttons: list[object] = []
-        self.console_window = None
-        self.intro_window = None
-        self.latest_mesh_bounds_xml = ""
-        self.pending_theme_after = None
-        self.accent_bar = None
-        self.accent_swatch = None
-        self.direct_accent_labels: list[object] = []
-        self.tinted_icon_cache: dict[tuple[str, str, int | None], object] = {}
-
-        self._build_ui()
-        self._apply_plain_widget_theme()
-        self.root.after_idle(self._refresh_app_styles)
-        if self.settings.get(INTRO_DISMISSED_KEY) != "1":
-            self.root.after(250, self._show_intro_dialog)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.after(100, self._poll_messages)
 
     def mainloop(self) -> None:
         self.root.mainloop()
@@ -218,154 +92,6 @@ class ToolkitAssistantApp:
         self.accent_light_color = palette["light"]
         self.accent_foreground_color = palette["foreground"]
 
-    def _apply_ui_theme(self) -> None:
-        self.lumi_theme_loaded = set_lumi_theme(self.root, ttk, self.ui_theme_name)
-        if self.lumi_theme_loaded:
-            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
-        self._refresh_app_styles()
-
-    def _set_root_redraw_enabled(self, enabled: bool) -> None:
-        if sys.platform != "win32":
-            return
-        try:
-            import ctypes
-
-            hwnd = self.root.winfo_id()
-            ctypes.windll.user32.SendMessageW(hwnd, 0x000B, int(enabled), 0)
-            if enabled:
-                ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0185)
-        except Exception:
-            pass
-
-    def _refresh_app_styles(self) -> None:
-        self._configure_styles()
-        self._apply_plain_widget_theme()
-        self._update_accent_widgets()
-
-    def _configure_styles(self) -> None:
-        style = ttk.Style(self.root)
-        dark_theme = self.lumi_theme_loaded and self.ui_theme_name == UI_THEME_DARK
-        subtitle_color = "#d0d0d0" if dark_theme else "#444444"
-
-        self._configure_accent_label_style(style, "Accent.TLabel")
-        self._configure_accent_label_style(style, "Title.TLabel", font=("", 15, "bold"))
-        self._configure_accent_label_style(style, "SplashTitle.TLabel", font=("", 18, "bold"))
-        style.configure("SplashSubtitle.TLabel", foreground=subtitle_color, font=("", 10))
-        self._configure_accent_label_style(style, "AboutTitle.TLabel", font=("", 10, "bold"))
-        style.configure("AboutVersion.TLabel", font=("", 9, "bold"))
-        self._configure_accent_label_style(style, "Accent.TLabelframe.Label")
-        self._configure_accent_label_style(style, "Warning.TLabelframe.Label", font=("", 9, "bold"))
-        try:
-            style.configure(
-                ".",
-                focuscolor=self.accent_color,
-                selectbackground=self.accent_color,
-                selectforeground=self.accent_foreground_color,
-            )
-            style.map(
-                "TCombobox",
-                selectbackground=[("readonly", self.accent_color)],
-                selectforeground=[("readonly", self.accent_foreground_color)],
-            )
-        except tk.TclError:
-            pass
-        if self.lumi_theme_loaded:
-            style.configure("Accent.TButton", foreground=self.accent_foreground_color)
-            style.map("Accent.TButton", foreground=[("pressed", self.accent_light_color), ("disabled", "#a5a5a5")])
-        else:
-            style.configure("Accent.TButton", foreground=self.accent_color)
-            style.map("Accent.TButton", foreground=[("active", self.accent_dark_color), ("disabled", "#808080")])
-
-        try:
-            style.configure("TNotebook.Tab", padding=(8, 3) if self.lumi_theme_loaded else (12, 5))
-            if self.lumi_theme_loaded:
-                style.map("TNotebook.Tab", foreground=[("selected", self.accent_color)])
-            else:
-                style.map(
-                    "TNotebook.Tab",
-                    foreground=[("selected", self.accent_color)],
-                    background=[("selected", self.accent_light_color)],
-                )
-        except tk.TclError:
-            pass
-
-    def _configure_accent_label_style(self, style, style_name: str, *, font=None) -> None:
-        options = {"foreground": self.accent_color}
-        if font is not None:
-            options["font"] = font
-        style.configure(style_name, **options)
-        style.map(
-            style_name,
-            foreground=[
-                ("disabled", self.accent_dark_color),
-                ("!disabled", self.accent_color),
-            ],
-        )
-
-    def _apply_plain_widget_theme(self) -> None:
-        if self.ui_theme_name == UI_THEME_DARK and self.lumi_theme_loaded:
-            colors = {
-                "background": "#252525",
-                "foreground": "#fafafa",
-                "insertbackground": "#fafafa",
-                "selectbackground": self.accent_color,
-                "selectforeground": self.accent_foreground_color,
-            }
-        else:
-            colors = {
-                "background": "#ffffff",
-                "foreground": "#000000",
-                "insertbackground": "#000000",
-                "selectbackground": self.accent_color,
-                "selectforeground": self.accent_foreground_color,
-            }
-
-        for widget_name in ("patch_uuid_text", "patch_bounds_text"):
-            widget = getattr(self, widget_name, None)
-            if widget is not None:
-                widget.configure(**colors)
-
-        listbox = getattr(self, "auto_selected_lsf_listbox", None)
-        if listbox is not None:
-            listbox.configure(
-                background=colors["background"],
-                foreground=colors["foreground"],
-                selectbackground=colors["selectbackground"],
-                selectforeground=colors["selectforeground"],
-            )
-
-    def _update_accent_widgets(self) -> None:
-        if self.accent_bar is not None:
-            self.accent_bar.configure(bg=self.accent_color)
-
-        if self.accent_swatch is not None:
-            self.accent_swatch.configure(bg=self.accent_color, highlightbackground=self.accent_dark_color)
-
-        for label in self.direct_accent_labels:
-            try:
-                if label.winfo_exists():
-                    label.configure(foreground=self.accent_color)
-            except tk.TclError:
-                pass
-
-        if self.console_output_text is not None:
-            self.console_output_text.tag_configure("section", foreground=self.accent_light_color)
-
-    def _set_accent_color(self, accent_color: object, *, save: bool = True) -> None:
-        normalized_color = normalize_accent_color(accent_color)
-        if normalized_color == self.accent_color:
-            return
-
-        self._set_accent_palette(normalized_color)
-        self.settings[ACCENT_COLOR_SETTING_KEY] = self.accent_color
-        if self.lumi_theme_loaded:
-            apply_lumi_accent(self.root, tk, ttk, self.accent_color)
-        self._refresh_tinted_icons()
-        self._refresh_app_styles()
-        self.root.after_idle(self._refresh_app_styles)
-        if save:
-            self._save_accent_preference()
-
     def _choose_accent_color(self) -> None:
         _rgb, selected_color = colorchooser.askcolor(
             color=self.accent_color,
@@ -375,196 +101,18 @@ class ToolkitAssistantApp:
         if selected_color:
             self._set_accent_color(selected_color)
             if hasattr(self, "settings_status_label"):
-                self.settings_status_label.configure(text="Accent colour updated")
+                self._set_status(self.settings_status_label, "Accent colour updated")
 
     def _reset_accent_color(self) -> None:
         self._set_accent_color(ACCENT_COLOR)
         if hasattr(self, "settings_status_label"):
-            self.settings_status_label.configure(text="Accent colour reset")
+            self._set_status(self.settings_status_label, "Accent colour reset")
 
     def _save_accent_preference(self) -> None:
         try:
             save_settings(self.settings)
         except OSError as exc:
             messagebox.showwarning(APP_TITLE, f"Could not save accent colour: {exc}")
-
-    def _refresh_tinted_icons(self) -> None:
-        self.tinted_icon_cache.clear()
-        self.about_link_icons.clear()
-        self.console_icon = None
-
-        console_icon = self._load_console_icon()
-        if console_icon is not None:
-            for label in self.console_toggle_buttons:
-                try:
-                    if label.winfo_exists():
-                        label.configure(image=console_icon)
-                except tk.TclError:
-                    pass
-
-        for label, icon_name in self.about_link_icon_labels:
-            icon = self._load_about_icon(icon_name)
-            if icon is None:
-                continue
-            try:
-                if label.winfo_exists():
-                    label.configure(image=icon)
-            except tk.TclError:
-                pass
-
-    def _build_ui(self) -> None:
-        outer = ttk.Frame(self.root, padding=14)
-        outer.pack(fill="both", expand=True)
-
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(2, weight=1)
-
-        header = ttk.Frame(outer)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        header.columnconfigure(0, weight=1)
-
-        title = ttk.Label(header, text=APP_HEADING, style="Title.TLabel", foreground=self.accent_color)
-        self.direct_accent_labels.append(title)
-        title.grid(row=0, column=0, sticky="w")
-        self._build_console_toggle(header).grid(row=0, column=1, sticky="e")
-
-        accent_bar = tk.Frame(outer, height=3, bg=self.accent_color)
-        self.accent_bar = accent_bar
-        accent_bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-
-        notebook = ttk.Notebook(outer)
-        notebook.grid(row=2, column=0, sticky="nsew")
-        self.main_notebook = notebook
-
-        bounds_tab = ttk.Frame(notebook, padding=(10, 1, 10, 10))
-        import_tab = ttk.Frame(notebook, padding=10)
-        project_backup_tab = ttk.Frame(notebook, padding=10)
-        settings_tab = ttk.Frame(notebook, padding=10)
-        notebook.add(bounds_tab, text="Bounds Patcher")
-        notebook.add(import_tab, text="Import Repair")
-        notebook.add(project_backup_tab, text="Project Tools")
-        notebook.add(settings_tab, text="Settings")
-        self.bounds_tab = bounds_tab
-        self.import_tab = import_tab
-        self.project_backup_tab = project_backup_tab
-        self.settings_tab = settings_tab
-
-        bounds_tab.columnconfigure(0, weight=1)
-        bounds_tab.rowconfigure(0, weight=1)
-        settings_tab.columnconfigure(1, weight=1)
-
-        bounds_modes = ttk.Notebook(bounds_tab)
-        bounds_modes.grid(row=0, column=0, sticky="nsew")
-
-        patch_tab = ttk.Frame(bounds_modes, padding=8)
-        auto_tab = ttk.Frame(bounds_modes, padding=8)
-        mesh_bounds_tab = ttk.Frame(bounds_modes, padding=8)
-        bounds_modes.add(auto_tab, text="One-Click Patcher")
-        bounds_modes.add(patch_tab, text="LSF Patcher")
-        bounds_modes.add(mesh_bounds_tab, text="Bounds Calculator")
-
-        self._build_patch_lsf_tab(patch_tab)
-        self._build_mesh_bounds_tab(mesh_bounds_tab)
-        self._build_auto_bounds_tab(auto_tab)
-
-        self._build_import_repair_tab(import_tab)
-        self._build_project_backup_tab(project_backup_tab)
-        self._build_settings_tab(settings_tab)
-        self.active_output_name = "One-Click Patcher"
-        self.active_status_label = self.auto_status_label
-
-    def _show_intro_dialog(self) -> None:
-        if self.intro_window is not None and self.intro_window.winfo_exists():
-            self.intro_window.lift()
-            return
-
-        dialog = tk.Toplevel(self.root)
-        self.intro_window = dialog
-        dialog.title("generic startup message (:")
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(0, weight=1)
-
-        dismiss_intro = tk.BooleanVar(master=dialog, value=False)
-
-        content = ttk.Frame(dialog, padding=16)
-        content.grid(row=0, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-
-        ttk.Label(content, text="hOI!", style="SplashTitle.TLabel").grid(row=0, column=0, sticky="w")
-        intro_label = self._add_wrapping_label(
-            content,
-            (
-                "Just a little tool I made for myself to assist with my modding workflow and "
-                "to help with issues I come across.\n\n"
-                "Please make sure you have LsLib installed.\n\n"
-                "To get started, go to the Settings tab and set the directory to the BG3 folder "
-                "and Divine.exe (found in LsLib)."
-            ),
-            row=1,
-            pady=(10, 0),
-            style="SplashSubtitle.TLabel",
-        )
-
-        button_row = ttk.Frame(content)
-        button_row.grid(row=2, column=0, sticky="ew", pady=(14, 0))
-        button_row.columnconfigure(0, weight=1)
-        ttk.Checkbutton(
-            button_row,
-            text="Don't show this again",
-            variable=dismiss_intro,
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Button(
-            button_row,
-            text="Wiki",
-            command=lambda: self._open_about_link(TOOLKIT_ASSISTANT_WIKI_URL),
-        ).grid(row=0, column=1, sticky="e", padx=(0, 8))
-        ttk.Button(
-            button_row,
-            text="Download LsLib",
-            command=lambda: self._open_about_link(LSLIB_RELEASES_URL),
-        ).grid(row=0, column=2, sticky="e", padx=(0, 8))
-        ttk.Button(
-            button_row,
-            text="Go to Settings",
-            command=lambda: close_intro(self.settings_tab),
-            style="Accent.TButton",
-        ).grid(row=0, column=3, sticky="e")
-
-        def close_intro(target_tab=None) -> None:
-            if dismiss_intro.get():
-                self.settings[INTRO_DISMISSED_KEY] = "1"
-                self.show_intro_on_startup.set(False)
-                try:
-                    save_settings(self.settings)
-                except OSError as exc:
-                    messagebox.showwarning(APP_TITLE, f"Could not save intro preference: {exc}")
-
-            if target_tab is not None:
-                self.main_notebook.select(target_tab)
-
-            dialog.grab_release()
-            dialog.destroy()
-            self.intro_window = None
-
-        dialog.protocol("WM_DELETE_WINDOW", close_intro)
-        desired_width = 520
-        intro_label.configure(wraplength=desired_width - 56)
-        dialog.update_idletasks()
-        width = max(dialog.winfo_width(), desired_width)
-        intro_label.configure(wraplength=width - 56)
-        dialog.update_idletasks()
-        height = dialog.winfo_height()
-        root_x = self.root.winfo_rootx()
-        root_y = self.root.winfo_rooty()
-        root_width = max(self.root.winfo_width(), width)
-        root_height = max(self.root.winfo_height(), height)
-        x = root_x + (root_width - width) // 2
-        y = root_y + (root_height - height) // 2
-        dialog.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
-        dialog.grab_set()
-        dialog.focus_set()
 
     def _add_wrapping_label(self, parent, text: str, *, row: int = 0, pady: tuple[int, int] | None = None, style: str | None = None):
         label_options = {
@@ -598,45 +146,6 @@ class ToolkitAssistantApp:
         spacer.grid(row=row, column=0, columnspan=columnspan, sticky="nsew")
         return spacer
 
-    def _build_console_toggle(self, parent):
-        icon = self._load_console_icon()
-        if icon is None:
-            console_toggle = ttk.Label(parent, text="Log", cursor="hand2", padding=(4, 2))
-        else:
-            console_toggle = ttk.Label(parent, image=icon, cursor="hand2", padding=0)
-
-        console_toggle.bind("<Button-1>", lambda _event: self._toggle_console_window())
-        self.console_toggle_buttons.append(console_toggle)
-        ToolTip(console_toggle, "Show or hide log")
-        return console_toggle
-
-    def _load_tinted_icon(self, filename: str, *, target_size: int | None = None):
-        cache_key = (filename, self.accent_color, target_size)
-        cached_icon = self.tinted_icon_cache.get(cache_key)
-        if cached_icon is not None:
-            return cached_icon
-
-        path = RESOURCE_DIR / "assets" / filename
-        if not path.is_file():
-            return None
-
-        try:
-            icon_data = path.read_bytes()
-            if self.accent_color != normalize_accent_color(ACCENT_COLOR):
-                icon_data = tint_accent_png(icon_data, self.accent_color)
-            encoded_icon = base64.b64encode(icon_data).decode("ascii")
-            icon = tk.PhotoImage(master=self.root, data=encoded_icon, format="png")
-        except (OSError, tk.TclError):
-            return None
-
-        if target_size is not None:
-            factor = max(icon.width() // target_size, icon.height() // target_size, 1)
-            if factor > 1:
-                icon = icon.subsample(factor, factor)
-
-        self.tinted_icon_cache[cache_key] = icon
-        return icon
-
     def _build_tab_footer(self, tab, row: int, *, columnspan: int = 3):
         footer = ttk.Frame(tab)
         footer.grid(row=row, column=0, columnspan=columnspan, sticky="sew")
@@ -648,62 +157,49 @@ class ToolkitAssistantApp:
 
         return status_label
 
+    def _set_status(
+        self,
+        status_label,
+        text: str,
+        *,
+        clear_after_ms: int | None = 5000,
+    ) -> None:
+        timers = getattr(self, "status_clear_timers", None)
+        if timers is None:
+            timers = {}
+            self.status_clear_timers = timers
+
+        existing_timer = timers.pop(status_label, None)
+        if existing_timer is not None:
+            try:
+                self.root.after_cancel(existing_timer)
+            except tk.TclError:
+                pass
+
+        status_label.configure(text=text)
+        if not text or clear_after_ms is None:
+            return
+
+        timer_id = None
+
+        def clear_status() -> None:
+            if timers.get(status_label) != timer_id:
+                return
+            timers.pop(status_label, None)
+            try:
+                if status_label.winfo_exists():
+                    status_label.configure(text="")
+            except tk.TclError:
+                pass
+
+        timer_id = self.root.after(clear_after_ms, clear_status)
+        timers[status_label] = timer_id
+
     def _load_console_icon(self):
         if self.console_icon is not None:
             return self.console_icon
         self.console_icon = self._load_tinted_icon(CONSOLE_ICON_PATH.name, target_size=16)
         return self.console_icon
-
-    def _ensure_console_window(self) -> None:
-        if self.console_window is not None and self.console_window.winfo_exists():
-            return
-
-        window = tk.Toplevel(self.root)
-        self.console_window = window
-        window.title("Toolkit Assistant Log")
-        self._set_window_icon(window)
-        window.geometry("720x360")
-        window.minsize(520, 240)
-        window.columnconfigure(0, weight=1)
-        window.rowconfigure(1, weight=1)
-        window.protocol("WM_DELETE_WINDOW", self._hide_console_window)
-
-        toolbar = ttk.Frame(window, padding=(10, 10, 10, 0))
-        toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(0, weight=1)
-        ttk.Button(toolbar, text="Clear", command=self._clear_console_output).grid(row=0, column=1, sticky="e")
-
-        log_frame = tk.Frame(window, bg="#15181f", highlightbackground="#343a46", highlightthickness=1)
-        log_frame.grid(row=1, column=0, sticky="nsew")
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-
-        output_text = tk.Text(
-            log_frame,
-            background="#15181f",
-            borderwidth=0,
-            foreground="#e7eaf0",
-            wrap="word",
-            font=("Consolas", 9),
-            highlightthickness=0,
-            insertbackground="#e7eaf0",
-            padx=12,
-            pady=10,
-            relief="flat",
-            selectbackground="#3d4554",
-            selectforeground="#ffffff",
-            state="disabled",
-        )
-        output_text.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(log_frame, command=output_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        output_text.configure(yscrollcommand=scrollbar.set)
-        output_text.tag_configure("section", foreground="#d6a8ff")
-        output_text.tag_configure("complete", foreground="#96f2b2")
-        output_text.tag_configure("error", foreground="#ff8f9a")
-        self.console_output_text = output_text
-
-        window.withdraw()
 
     def _toggle_console_window(self) -> None:
         self._ensure_console_window()
@@ -1178,7 +674,7 @@ class ToolkitAssistantApp:
         self.project_backup_status_label = self._build_tab_footer(tab, 11)
 
     def _build_settings_tab(self, settings_tab) -> None:
-        settings_tab.rowconfigure(7, weight=1)
+        settings_tab.rowconfigure(6, weight=1)
 
         ttk.Label(settings_tab, text="Game folder").grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Entry(settings_tab, textvariable=self.game_folder_path).grid(
@@ -1193,24 +689,16 @@ class ToolkitAssistantApp:
             sticky="ew",
         )
 
-        note_box = ttk.LabelFrame(settings_tab, text="Info", padding=10, style="Accent.TLabelframe")
-        note_box.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        note_box.columnconfigure(0, weight=1)
-        self._add_wrapping_label(
-            note_box,
-            "Select the folder named Baldurs Gate 3, not its Data folder.",
-        )
-
-        ttk.Label(settings_tab, text="Divine.exe").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(10, 0))
+        ttk.Label(settings_tab, text="Divine.exe").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(10, 0))
         ttk.Entry(settings_tab, textvariable=self.divine_path).grid(
-            row=2,
+            row=1,
             column=1,
             sticky="ew",
             padx=(0, 8),
             pady=(10, 0),
         )
         ttk.Button(settings_tab, text="Browse", command=self._browse_divine).grid(
-            row=2,
+            row=1,
             column=2,
             sticky="ew",
             pady=(10, 0),
@@ -1221,18 +709,18 @@ class ToolkitAssistantApp:
             text="Show intro on startup",
             variable=self.show_intro_on_startup,
             command=self._save_intro_preference,
-        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(12, 0))
 
         ttk.Checkbutton(
             settings_tab,
             text="Dark mode",
             variable=self.dark_mode,
             command=self._toggle_dark_mode,
-        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
-        ttk.Label(settings_tab, text="Accent colour").grid(row=5, column=0, sticky="w", padx=(0, 8), pady=(10, 0))
+        ttk.Label(settings_tab, text="Accent colour").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=(10, 0))
         accent_controls = ttk.Frame(settings_tab)
-        accent_controls.grid(row=5, column=1, columnspan=2, sticky="ew", pady=(10, 0))
+        accent_controls.grid(row=4, column=1, columnspan=2, sticky="ew", pady=(10, 0))
         accent_controls.columnconfigure(2, weight=1)
         self.accent_swatch = tk.Frame(
             accent_controls,
@@ -1246,11 +734,11 @@ class ToolkitAssistantApp:
         self.accent_swatch.grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.accent_swatch.grid_propagate(False)
         self.accent_swatch.bind("<Button-1>", lambda _event: self._choose_accent_color())
-        ToolTip(self.accent_swatch, "Choose accent colour")
+        LumiToolTip(self.accent_swatch, "Choose accent colour")
         ttk.Button(accent_controls, text="Reset", command=self._reset_accent_color).grid(row=0, column=1, sticky="w")
 
         settings_footer = ttk.Frame(settings_tab)
-        settings_footer.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        settings_footer.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(12, 0))
         settings_footer.columnconfigure(2, weight=1)
 
         ttk.Button(
@@ -1285,24 +773,32 @@ class ToolkitAssistantApp:
             sticky="e",
         )
 
-        self._build_spacer_row(settings_tab, 7)
+        self._build_spacer_row(settings_tab, 6)
 
         about_box = ttk.LabelFrame(settings_tab, text="About", padding=10, style="Accent.TLabelframe")
-        about_box.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        about_box.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         about_box.columnconfigure(0, weight=1)
 
+        about_heading_row = ttk.Frame(about_box)
+        about_heading_row.grid(row=0, column=0, sticky="w")
         about_heading = ttk.Label(
-            about_box,
-            text="Developed by Luminiari, powered by coffee and bagels.",
+            about_heading_row,
+            text="Developed by Luminiari, powered by coffee and bagels",
             style="AboutTitle.TLabel",
             foreground=self.accent_color,
         )
         self.direct_accent_labels.append(about_heading)
-        about_heading.grid(
-            row=0,
-            column=0,
-            sticky="w",
+        about_heading.grid(row=0, column=0, sticky="w")
+        period = ttk.Label(
+            about_heading_row,
+            text=".",
+            style="AboutTitle.TLabel",
+            foreground=self.accent_color,
         )
+        self.direct_accent_labels.append(period)
+        period.grid(row=0, column=1, sticky="w")
+        period.bind("<Button-1>", lambda _event: self._experimental_entry_clicked())
+
         ttk.Label(about_box, text=f"Version number {APP_VERSION}", style="AboutVersion.TLabel").grid(
             row=1,
             column=0,
@@ -1334,9 +830,195 @@ class ToolkitAssistantApp:
 
             link.grid(row=0, column=index + 1, padx=5)
             link.bind("<Button-1>", lambda _event, target=url: self._open_about_link(target))
-            ToolTip(link, label)
+            LumiToolTip(link, label)
 
-        self.settings_status_label = self._build_tab_footer(settings_tab, 9)
+        self.settings_status_label = self._build_tab_footer(settings_tab, 8)
+
+    def _build_experimental_tab(self, experimental_tab) -> None:
+        experimental_tab.columnconfigure(0, weight=1)
+        experimental_tab.rowconfigure(2, weight=1)
+
+        self.pak_source_path = tk.StringVar(master=self.root)
+        self.pak_output_path = tk.StringVar(master=self.root)
+
+        heading = ttk.Label(
+            experimental_tab,
+            text="Experimental Features",
+            style="AboutTitle.TLabel",
+            foreground=self.accent_color,
+        )
+        self.direct_accent_labels.append(heading)
+        heading.grid(row=0, column=0, sticky="w")
+
+        finalisation_box = ttk.LabelFrame(
+            experimental_tab,
+            text="PAK Finalisation",
+            padding=10,
+            style="Accent.TLabelframe",
+        )
+        finalisation_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        finalisation_box.columnconfigure(1, weight=1)
+
+        ttk.Label(finalisation_box, text="Source package").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(finalisation_box, textvariable=self.pak_source_path).grid(
+            row=0, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Button(
+            finalisation_box,
+            text="Browse",
+            command=self._browse_pak_source,
+        ).grid(row=0, column=2, sticky="ew")
+
+        ttk.Label(finalisation_box, text="Output package").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=(10, 0)
+        )
+        ttk.Entry(finalisation_box, textvariable=self.pak_output_path).grid(
+            row=1,
+            column=1,
+            sticky="ew",
+            padx=(0, 8),
+            pady=(10, 0),
+        )
+        ttk.Button(
+            finalisation_box,
+            text="Browse",
+            command=self._browse_pak_output,
+        ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
+
+        note_box = ttk.LabelFrame(
+            finalisation_box,
+            text="Important",
+            padding=10,
+            style="Warning.TLabelframe",
+        )
+        note_box.grid(
+            row=2,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(12, 0),
+        )
+        note_box.columnconfigure(0, weight=1)
+        self._add_wrapping_label(
+            note_box,
+            (
+                "Creates a separate V16 package using an experimental finalisation "
+                "pass. Keep the original source package in a safe place."
+            ),
+        )
+
+        actions = ttk.Frame(finalisation_box)
+        actions.grid(
+            row=3,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(12, 0),
+        )
+        actions.columnconfigure(0, weight=1)
+        self.pak_finalise_run_button = ttk.Button(
+            actions,
+            text="Finalise Copy",
+            command=self._start_pak_finalisation,
+            style="Accent.TButton",
+        )
+        self.pak_finalise_run_button.grid(row=0, column=1, sticky="e")
+        self.run_buttons.append(self.pak_finalise_run_button)
+
+        self._build_spacer_row(experimental_tab, 2, columnspan=1)
+        self.experimental_status_label = self._build_tab_footer(
+            experimental_tab, 3, columnspan=1
+        )
+
+    def _restore_experimental_features(self) -> None:
+        experimental_setting = self.settings.get(
+            EXPERIMENTAL_FEATURES_UNLOCKED_KEY
+        )
+        if experimental_setting == "1":
+            self._add_experimental_tab()
+            return
+        if experimental_setting is not None:
+            return
+
+        self.settings[EXPERIMENTAL_FEATURES_UNLOCKED_KEY] = "0"
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            self.settings.pop(EXPERIMENTAL_FEATURES_UNLOCKED_KEY, None)
+            messagebox.showwarning(
+                APP_TITLE,
+                f"Could not initialise the experimental feature setting: {exc}",
+                parent=self.root,
+            )
+
+    def _experimental_entry_clicked(self) -> None:
+        if self.experimental_tab is not None:
+            confirmed = messagebox.askyesno(
+                "Experimental Features",
+                (
+                    "Experimental features are currently enabled. Do you want to "
+                    "disable them the next time the app starts?"
+                ),
+                parent=self.root,
+            )
+            if not confirmed:
+                return
+
+            previous_value = self.settings.get(
+                EXPERIMENTAL_FEATURES_UNLOCKED_KEY
+            )
+            self.settings[EXPERIMENTAL_FEATURES_UNLOCKED_KEY] = "0"
+            try:
+                save_settings(self.settings)
+            except OSError as exc:
+                if previous_value is None:
+                    self.settings.pop(EXPERIMENTAL_FEATURES_UNLOCKED_KEY, None)
+                else:
+                    self.settings[
+                        EXPERIMENTAL_FEATURES_UNLOCKED_KEY
+                    ] = previous_value
+                messagebox.showwarning(
+                    APP_TITLE,
+                    f"Could not save the experimental feature setting: {exc}",
+                    parent=self.root,
+                )
+                return
+
+            self._set_status(
+                self.settings_status_label,
+                "Experimental features will be disabled after restart",
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "Experimental Features",
+            (
+                "Hey, you clicked this. Are you sure you want to unlock "
+                "experimental features?"
+            ),
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self.settings[EXPERIMENTAL_FEATURES_UNLOCKED_KEY] = "1"
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            messagebox.showwarning(
+                APP_TITLE,
+                (
+                    "Experimental features were unlocked for this session, but "
+                    f"the setting could not be saved: {exc}"
+                ),
+                parent=self.root,
+            )
+        self._add_experimental_tab(select=True)
+        self._set_status(
+            self.settings_status_label, "Experimental features unlocked"
+        )
 
     def _browse_mesh_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1345,6 +1027,32 @@ class ToolkitAssistantApp:
         )
         if path:
             self.mesh_file_path.set(path)
+
+    def _browse_pak_source(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Choose source package",
+            filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        self.pak_source_path.set(path)
+        self.pak_output_path.set(str(default_finalised_pak_path(path)))
+
+    def _browse_pak_output(self) -> None:
+        source_text = self.pak_source_path.get().strip()
+        suggested = (
+            default_finalised_pak_path(source_text).name
+            if source_text
+            else "finalised.pak"
+        )
+        path = filedialog.asksaveasfilename(
+            title="Choose output package",
+            defaultextension=".pak",
+            initialfile=suggested,
+            filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
+        )
+        if path:
+            self.pak_output_path.set(path)
 
     def _browse_auto_selected_lsfs(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -1379,16 +1087,6 @@ class ToolkitAssistantApp:
         )
         if path:
             self.patch_single_lsf_path.set(path)
-
-    def _set_window_icon(self, window=None) -> None:
-        if not APP_ICON_PATH.is_file():
-            return
-
-        target = window or self.root
-        try:
-            target.iconbitmap(default=str(APP_ICON_PATH))
-        except tk.TclError:
-            pass
 
     def _browse_patch_lsf_root(self) -> None:
         path = filedialog.askdirectory(title="Choose Content folder")
@@ -1438,7 +1136,9 @@ class ToolkitAssistantApp:
     def _log_no_project_selection(self) -> None:
         self._activate_project_backup_output()
         self._append_output("No projects selected.\n")
-        self.project_backup_status_label.configure(text="No projects selected")
+        self._set_status(
+            self.project_backup_status_label, "No projects selected"
+        )
 
     def _log_project_backup_selection(self, project_names: list[str]) -> None:
         self._activate_project_backup_output()
@@ -1447,150 +1147,6 @@ class ToolkitAssistantApp:
         for project_name in project_names:
             self._append_output(f"- {project_name}\n")
         self._append_output("\n")
-
-    def _open_project_backup_picker(self) -> None:
-        if self._is_busy():
-            return
-
-        if self.project_picker_window is not None and self.project_picker_window.winfo_exists():
-            self.project_picker_window.lift()
-            return
-
-        game_folder = self.game_folder_path.get().strip()
-        if not game_folder:
-            messagebox.showwarning(APP_TITLE, "Choose the Game folder in Settings first.")
-            return
-        game_folder_error = get_game_folder_error(game_folder)
-        if game_folder_error:
-            messagebox.showwarning(APP_TITLE, game_folder_error)
-            return
-
-        projects_dir = Path(game_folder) / "Data" / "Projects"
-        if not projects_dir.is_dir():
-            messagebox.showwarning(APP_TITLE, f"Could not find Projects folder: {projects_dir}")
-            return
-
-        try:
-            project_names = find_toolkit_project_names(projects_dir)
-        except OSError as exc:
-            messagebox.showwarning(APP_TITLE, f"Could not read Projects folder: {exc}")
-            return
-
-        if not project_names:
-            self._log_no_project_selection()
-            return
-
-        dialog = tk.Toplevel(self.root)
-        self.project_picker_window = dialog
-        dialog.title("Select Projects")
-        dialog.transient(self.root)
-        dialog.resizable(True, True)
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(0, weight=1)
-
-        content = ttk.Frame(dialog, padding=12)
-        content.grid(row=0, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(0, weight=1)
-
-        list_frame = ttk.Frame(content)
-        list_frame.grid(row=0, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-
-        project_canvas = tk.Canvas(
-            list_frame,
-            height=min(260, max(130, len(project_names) * 26)),
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        project_canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(list_frame, command=project_canvas.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        project_canvas.configure(yscrollcommand=scrollbar.set)
-
-        checkbox_frame = ttk.Frame(project_canvas)
-        checkbox_window = project_canvas.create_window((0, 0), window=checkbox_frame, anchor="nw")
-
-        def update_checkbox_scroll_region(_event=None) -> None:
-            project_canvas.configure(scrollregion=project_canvas.bbox("all"))
-
-        def resize_checkbox_frame(event) -> None:
-            project_canvas.itemconfigure(checkbox_window, width=event.width)
-
-        checkbox_frame.bind("<Configure>", update_checkbox_scroll_region)
-        project_canvas.bind("<Configure>", resize_checkbox_frame)
-
-        selected_names = {project_name.lower() for project_name in self.project_backup_selected_projects}
-        project_vars: list[tuple[str, tk.BooleanVar]] = []
-        for index, project_name in enumerate(project_names):
-            selected = project_name.lower() in selected_names
-            selected_var = tk.BooleanVar(master=dialog, value=selected)
-            project_vars.append((project_name, selected_var))
-            ttk.Checkbutton(
-                checkbox_frame,
-                text=project_name,
-                variable=selected_var,
-            ).grid(row=index, column=0, sticky="w", pady=1)
-
-        button_row = ttk.Frame(content)
-        button_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        button_row.columnconfigure(2, weight=1)
-
-        def close_picker() -> None:
-            dialog.grab_release()
-            dialog.destroy()
-            self.project_picker_window = None
-
-        def select_all_projects() -> None:
-            for _project_name, selected_var in project_vars:
-                selected_var.set(True)
-
-        def clear_project_selection() -> None:
-            for _project_name, selected_var in project_vars:
-                selected_var.set(False)
-
-        def save_project_selection() -> None:
-            selected_projects = [project_name for project_name, selected_var in project_vars if selected_var.get()]
-            if not selected_projects:
-                close_picker()
-                self._log_no_project_selection()
-                return
-
-            self.project_backup_selected_projects = selected_projects
-            self._update_project_backup_selection_summary()
-            self._log_project_backup_selection(selected_projects)
-            self.project_backup_status_label.configure(text=self.project_backup_selection_text.get())
-            close_picker()
-
-        ttk.Button(button_row, text="Select All", command=select_all_projects).grid(row=0, column=0, sticky="w")
-        ttk.Button(button_row, text="Select None", command=clear_project_selection).grid(
-            row=0,
-            column=1,
-            sticky="w",
-            padx=(8, 0),
-        )
-        ttk.Button(button_row, text="Cancel", command=close_picker).grid(row=0, column=3, sticky="e", padx=(0, 8))
-        ttk.Button(
-            button_row,
-            text="Save Selection",
-            command=save_project_selection,
-            style="Accent.TButton",
-        ).grid(row=0, column=4, sticky="e")
-
-        dialog.protocol("WM_DELETE_WINDOW", close_picker)
-        dialog.update_idletasks()
-        width = max(dialog.winfo_width(), 460)
-        height = max(dialog.winfo_height(), 320)
-        root_x = self.root.winfo_rootx()
-        root_y = self.root.winfo_rooty()
-        root_width = max(self.root.winfo_width(), width)
-        root_height = max(self.root.winfo_height(), height)
-        x = root_x + (root_width - width) // 2
-        y = root_y + (root_height - height) // 2
-        dialog.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
-        dialog.grab_set()
-        dialog.focus_set()
 
     def _save_current_settings(self) -> bool:
         divine = self.divine_path.get().strip()
@@ -1630,16 +1186,6 @@ class ToolkitAssistantApp:
             self.root.after_cancel(self.pending_theme_after)
         self.pending_theme_after = self.root.after_idle(self._apply_and_save_ui_theme)
 
-    def _apply_and_save_ui_theme(self) -> None:
-        self.pending_theme_after = None
-        self._set_root_redraw_enabled(False)
-        try:
-            self._apply_ui_theme()
-            self.root.update_idletasks()
-        finally:
-            self._set_root_redraw_enabled(True)
-        self.root.after(50, self._save_theme_preference)
-
     def _save_theme_preference(self) -> None:
         try:
             save_settings(self.settings)
@@ -1648,18 +1194,17 @@ class ToolkitAssistantApp:
 
     def _save_settings_clicked(self) -> None:
         if self._save_current_settings():
-            self.settings_status_label.configure(text="Settings saved")
+            self._set_status(self.settings_status_label, "Settings saved")
 
     def _open_settings_folder_clicked(self) -> None:
         settings_folder = SETTINGS_PATH.parent
         try:
             settings_folder.mkdir(parents=True, exist_ok=True)
             if sys.platform == "win32":
-                # Python knows this exists on Windows, but apparently needs me to say it.
-                os.startfile(str(settings_folder))  # type: ignore[attr-defined]
+                os.startfile(str(settings_folder))
             else:
                 webbrowser.open(settings_folder.as_uri())
-            self.settings_status_label.configure(text="Settings folder opened")
+            self._set_status(self.settings_status_label, "Settings folder opened")
         except Exception as exc:
             messagebox.showwarning(APP_TITLE, f"Could not open settings folder: {exc}")
 
@@ -1685,7 +1230,10 @@ class ToolkitAssistantApp:
             return
 
         messagebox.showinfo(APP_TITLE, f"Deleted {deleted} temporary item(s).")
-        self.settings_status_label.configure(text=f"Deleted {deleted} temporary item(s)")
+        self._set_status(
+            self.settings_status_label,
+            f"Deleted {deleted} temporary item(s)",
+        )
 
     def _set_intro_preference_in_settings(self) -> None:
         self.settings[INTRO_DISMISSED_KEY] = "0" if self.show_intro_on_startup.get() else "1"
@@ -1760,6 +1308,10 @@ class ToolkitAssistantApp:
         self.active_output_name = "Project Tools"
         self.active_status_label = self.project_backup_status_label
 
+    def _activate_experimental_output(self) -> None:
+        self.active_output_name = "PAK Finalisation"
+        self.active_status_label = self.experimental_status_label
+
     def _update_auto_selected_lsf_summary(self) -> None:
         count = len(self.auto_selected_lsf_paths)
         if count == 0:
@@ -1824,6 +1376,64 @@ class ToolkitAssistantApp:
                 mesh_file,
                 divine,
             ),
+            daemon=True,
+        )
+        self.worker.start()
+
+    def _start_pak_finalisation(self) -> None:
+        if self._is_busy():
+            return
+
+        self._activate_experimental_output()
+        source_text = self.pak_source_path.get().strip()
+        output_text = self.pak_output_path.get().strip()
+        source = Path(source_text) if source_text else None
+        destination = Path(output_text) if output_text else None
+        if source is None or not source.is_file():
+            messagebox.showwarning(APP_TITLE, "Choose a valid source .pak file.")
+            return
+        if source.suffix.lower() != ".pak":
+            messagebox.showwarning(APP_TITLE, "The source must be a .pak file.")
+            return
+        if destination is None:
+            destination = default_finalised_pak_path(source)
+            self.pak_output_path.set(str(destination))
+        if destination.suffix.lower() != ".pak":
+            messagebox.showwarning(
+                APP_TITLE, "The output package must use the .pak extension."
+            )
+            return
+        if os.path.normcase(str(source.resolve())) == os.path.normcase(
+            str(destination.resolve())
+        ):
+            messagebox.showwarning(
+                APP_TITLE, "The output package cannot overwrite the source package."
+            )
+            return
+
+        overwrite = destination.exists()
+        overwrite_note = (
+            "\n\nThe existing output package will be replaced."
+            if overwrite
+            else ""
+        )
+        confirmed = messagebox.askyesno(
+            "Experimental PAK Finalisation",
+            (
+                "Create the finalised package copy now?\n\n"
+                "This experimental pass may affect compatibility. Retain the "
+                f"original source package.{overwrite_note}"
+            ),
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self._clear_output()
+        self._set_running(True)
+        self.worker = threading.Thread(
+            target=self._run_pak_finalisation,
+            args=(str(source), str(destination), overwrite),
             daemon=True,
         )
         self.worker.start()
@@ -2165,6 +1775,26 @@ class ToolkitAssistantApp:
         except Exception as exc:
             self.messages.put(("error", str(exc)))
 
+    def _run_pak_finalisation(
+        self,
+        source: str,
+        destination: str,
+        overwrite: bool,
+    ) -> None:
+        try:
+            result = finalise_pak(
+                source,
+                destination,
+                overwrite=overwrite,
+                progress=lambda message: self.messages.put(("log", message)),
+            )
+            self.messages.put(
+                ("log", f"Processed internal path: {result.processed_path}\n")
+            )
+            self.messages.put(("done", 1))
+        except Exception as exc:
+            self.messages.put(("error", str(exc)))
+
     def _run_single_patcher(
         self,
         lsf_file: str,
@@ -2347,11 +1977,11 @@ class ToolkitAssistantApp:
                 elif kind == "done":
                     self._set_running(False)
                     self._append_output("\nComplete.\n", "complete")
-                    self._current_status_label().configure(text="Complete")
+                    self._set_status(self._current_status_label(), "Complete")
                 elif kind == "error":
                     self._append_output(f"Error: {value}\n", "error")
                     self._set_running(False)
-                    self._current_status_label().configure(text="Failed")
+                    self._set_status(self._current_status_label(), "Failed")
         except queue.Empty:
             pass
 
@@ -2375,7 +2005,11 @@ class ToolkitAssistantApp:
         for button in self.run_buttons:
             button.configure(state="disabled" if running else "normal")
         if running:
-            self._current_status_label().configure(text="Running...")
+            self._set_status(
+                self._current_status_label(),
+                "Running...",
+                clear_after_ms=None,
+            )
 
     def _current_status_label(self):
         return self.active_status_label
@@ -2389,12 +2023,7 @@ class ToolkitAssistantApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(self.latest_mesh_bounds_xml)
         self.root.update()
-        self._current_status_label().configure(text="Copied bounds XML")
+        self._set_status(self._current_status_label(), "Copied bounds XML")
 
     def _on_close(self) -> None:
         self.root.destroy()
-
-def main() -> int:
-    app = ToolkitAssistantApp()
-    app.mainloop()
-    return 0

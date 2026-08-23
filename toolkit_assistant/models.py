@@ -1,5 +1,3 @@
-"""Small data containers shared by Toolkit Assistant workflows."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

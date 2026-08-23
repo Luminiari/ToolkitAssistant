@@ -1,5 +1,3 @@
-"""Application constants for Toolkit Assistant."""
-
 from __future__ import annotations
 
 import os
@@ -19,7 +17,6 @@ RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PACKAGED_RESOURCE_DIR if PACKAGED_R
 VERSION_INFO_PATH = RESOURCE_DIR / "version_info.txt"
 APP_ICON_PATH = RESOURCE_DIR / "assets" / "ToolkitAssistant.ico"
 CONSOLE_ICON_PATH = RESOURCE_DIR / "assets" / "icon-console.png"
-LUMI_SUN_VALLEY_THEME_PATH = RESOURCE_DIR / "assets" / "lumi-sun-valley-theme" / "lumi_sv.tcl"
 SETTINGS_PATH = (
     Path(os.environ["APPDATA"]) / "ToolkitAssistant" / "settings.json"
     if os.environ.get("APPDATA")
@@ -40,6 +37,7 @@ def read_app_version() -> str:
 
 APP_VERSION = read_app_version()
 INTRO_DISMISSED_KEY = "intro_dismissed"
+EXPERIMENTAL_FEATURES_UNLOCKED_KEY = "experimental_features_unlocked"
 LSLIB_RELEASES_URL = "https://github.com/Norbyte/lslib/releases"
 TOOLKIT_ASSISTANT_WIKI_URL = "https://github.com/Luminiari/ToolkitAssistant/wiki"
 TEMPORARY_FILES_ROOT = SETTINGS_PATH.parent / "temporary_backups"

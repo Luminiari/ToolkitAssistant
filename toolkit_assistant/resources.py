@@ -1,5 +1,3 @@
-"""BG3 resource and VisualBank reference helpers."""
-
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,5 +1,3 @@
-"""Temporary file cleanup helpers."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +5,6 @@ import shutil
 
 
 def delete_temp_folder_contents(temp_root: str | Path) -> int:
-    """Delete everything inside the app temp folder and return the top-level item count."""
 
     temp_path = Path(temp_root)
     if not temp_path.exists():

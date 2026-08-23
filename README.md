@@ -1,14 +1,15 @@
 # Lumi's Toolkit Assistant
+
 A small Windows helper for Baldur's Gate 3 Toolkit chores I got tired of doing by hand. Larian why are you like this.
 
 If you just want to use the thing and do not care how it works:
 
-* Download the latest build from the [Releases page](https://github.com/Luminiari/ToolkitAssistant/releases/latest).
-* Read the [project Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki) for instructions on tool operation, though I did try to make it as simple as possible ~~lol. lmao even~~.
+* Download the latest build from the [Releases page](https://github.com/Luminiari/ToolkitAssistant/releases).
+* Read the [project Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki) for instructions on tool operation, though I did try to make it as simple as possible.
 
 If you are here to look at the source or build it yourself, I am sorry for what I am about to do to your eyeballs.
 
-## What It Do
+## What It Does
 
 * Patches VisualBank LSF bounds from related GR2 meshes
 * Calculates bounds XML from `.gr2` or `.dae` meshes
@@ -17,7 +18,7 @@ If you are here to look at the source or build it yourself, I am sorry for what 
 * Renames Toolkit mod folders while preserving UUID suffixes
 * Backs up Toolkit project folders before you do something adventurous
 
-## What's In It
+## Project Shape
 
 The app entry point is:
 
@@ -33,7 +34,9 @@ toolkit_assistant/
 
 Useful starting points:
 
-* `toolkit_assistant/app.py` - Tkinter UI
+* `toolkit_assistant/lumi_app.py` - active LumiUI application shell
+* `toolkit_assistant/lumi_widgets.py` - LumiUI-backed compatibility adapters for the existing screen builders
+* `toolkit_assistant/app.py` - screen builders and application workflows shared by the LumiUI shell
 * `toolkit_assistant/bounds_patcher.py` - LSF and VisualBank patching workflows
 * `toolkit_assistant/mesh_bounds.py` - GR2/DAE bounds calculation
 * `toolkit_assistant/import_repair.py` - import settings XML repair
@@ -47,6 +50,7 @@ For running from source:
 
 * Windows
 * Python 3.11 or newer
+* The `LumiUI` repository checked out beside this repository
 * `Divine.exe` from Norbyte's LSLib
 * A Baldur's Gate 3 install folder
 
@@ -63,6 +67,23 @@ $env:LSLIB_DIVINE = "C:\Tools\ExportTool\Tools\Divine.exe"
 
 ## Run From Source
 
+Keep the two repositories beside each other. Toolkit Assistant deliberately resolves
+the live sibling checkout so local runs and release builds use the same LumiUI source:
+
+```text
+Code Projects/
+|-- LumiUI/
+`-- ToolkitAssistant/
+```
+
+Install the dependencies first:
+
+```powershell
+py -3 -m pip install -r requirements-build.txt
+```
+
+Then run the app:
+
 ```powershell
 py -3 ToolkitAssistant.pyw
 ```
@@ -73,7 +94,13 @@ If the Windows Python launcher is not available:
 python ToolkitAssistant.pyw
 ```
 
-## Build The EXE
+Run the developer checks with:
+
+```powershell
+py -3 tests\local_check.py
+```
+
+## Build The Release Zip
 
 From this folder:
 
@@ -87,18 +114,25 @@ If you use `python` instead of the Windows launcher:
 powershell -ExecutionPolicy Bypass -File .\build.ps1 -Python python
 ```
 
-The finished app is written to:
+The release zip is written to:
 
 ```text
-dist\ToolkitAssistant.exe
+dist\ToolkitAssistant-v2026.7.6.0.zip
 ```
 
-with a release zip written to:
+The version in the filename comes from `version_info.txt`, so ideally I only have to remember one thing. Inside the zip, the app folder looks like:
 
 ```text
-dist\ToolkitAssistant-v[VERSION].zip
+ToolkitAssistant\
++-- ToolkitAssistant.exe
++-- python312.dll
++-- lib\
++-- runtime\
 ```
-where [VERSION] comes from `version_info.txt`, so ideally I only have to remember one thing because I am Big Stupid and have smol uwu brain.
+
+The build prints the resolved LumiUI `__init__.py` path and aborts unless it comes
+from the sibling `LumiUI` checkout. The package is then copied into `lib\luminiari_ui`
+for the standalone release.
 
 ## Local Settings
 
@@ -114,25 +148,16 @@ This stores paths like the selected `Divine.exe`, the selected BG3 folder, and t
 
 Do not run Toolkit Assistant while the BG3 Toolkit is open. The Toolkit can overwrite project files when it saves or exits, because of course it can.
 
-Backups are enabled by default for file replacement workflows. Keep them on unless you like to live dangerously.
+Backups are enabled by default for file replacement workflows. Keep them on unless you have a separate recovery point.
 
 ## Documentation
 
-How-to documentation belongs in the [Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki). It's already a meme that I like writing documentation but I also write too much so whatever.
-
-Generally recommend reading this regardless, especially [Safety Notes](https://github.com/Luminiari/ToolkitAssistant/wiki/So-you-wanna-use-my-little-tool#general-safety-notes). I use the term safety very heavy-handedly.
-
-## Acknowledgments
-
-- Thanks to Norbyte for [LsLib](https://github.com/Norbyte/lslib).
-- Thanks to rdbende for the [Sun Valley ttk theme](https://github.com/rdbende/Sun-Valley-ttk-theme) I butchered under the MIT licence.
-- Thanks to everyone behind Python, Tkinter, and py2exe.
-- Thanks to [Rain](https://www.patreon.com/cw/Rain_A) for being my guinea pig (sorry).
+The source copy of the usage guide lives in [`docs/usage-guide.md`](docs/usage-guide.md) and can be published to the [Wiki](https://github.com/Luminiari/ToolkitAssistant/wiki). It's already a meme that I like writing documentation but I also write too much so whatever.
 
 ## Licence
 
-Lumi's Toolkit Assistant uses a proprietary source-available licence. Source may be viewed and built for personal use, but reuse, redistribution, or forks require permission. See [`LICENSE.md`](https://github.com/Luminiari/ToolkitAssistant?tab=License-1-ov-file).
+Lumi's Toolkit Assistant uses a proprietary source-available licence. Source may be viewed and built for personal use, but reuse, redistribution, or forks require permission. See `LICENSE.md`.
 
 This is an unofficial fan project and is not endorsed by Larian Studios or Wizards of the Coast.
 
-<h1 align="center"><b>Support your local trans creators please and thank you. 🏳️‍⚧️</b></h1>
+Support your local trans creators please and thank you.

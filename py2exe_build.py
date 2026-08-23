@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import ast
 import ctypes
+import importlib.util
 from pathlib import Path
 import pkgutil
 import re
 import shutil
 import struct
+import sys
 from ctypes import wintypes
 
 
@@ -14,14 +16,23 @@ ROOT = Path(__file__).resolve().parent
 DIST_ROOT = ROOT / "dist"
 BUNDLE_NAME = "ToolkitAssistant"
 BUNDLE_DIR = DIST_ROOT / BUNDLE_NAME
+LIB_DIR = BUNDLE_DIR / "lib"
 RUNTIME_DIR = BUNDLE_DIR / "runtime"
 ASSET_DIR = ROOT / "assets"
 ICON_PATH = ASSET_DIR / "ToolkitAssistant.ico"
 VERSION_INFO_PATH = ROOT / "version_info.txt"
+LUMIUI_ROOT = ROOT.parent / "LumiUI"
+LUMIUI_PACKAGE_DIR = LUMIUI_ROOT / "luminiari_ui"
 RT_VERSION = 16
 VERSION_RESOURCE_ID = 1
 LANG_EN_AU = 0x0C09
 UNICODE_CODEPAGE = 1200
+EXTERNAL_PACKAGES = (
+    "customtkinter",
+    "darkdetect",
+    "packaging",
+    "luminiari_ui",
+)
 
 
 VERSION_STRING_TO_PY2EXE_KEY = {
@@ -37,6 +48,50 @@ VERSION_STRING_TO_PY2EXE_KEY = {
     "ProductVersion": "product_version",
     "SpecialBuild": "special_build",
 }
+
+
+def configure_lumiui_source() -> Path:
+    """Pin this build to the LumiUI checkout beside ToolkitAssistant."""
+
+    expected_init = (LUMIUI_PACKAGE_DIR / "__init__.py").resolve()
+    if not expected_init.is_file():
+        raise RuntimeError(
+            "LumiUI must be checked out beside ToolkitAssistant: "
+            f"expected {expected_init}"
+        )
+
+    root_text = str(LUMIUI_ROOT.resolve())
+    while root_text in sys.path:
+        sys.path.remove(root_text)
+    insert_at = 0
+    for index, entry in enumerate(sys.path):
+        try:
+            if Path(entry or ".").resolve() == ROOT:
+                insert_at = index + 1
+                break
+        except OSError:
+            continue
+    sys.path.insert(insert_at, root_text)
+
+    loaded_module = sys.modules.get("luminiari_ui")
+    if loaded_module is not None:
+        loaded_file = Path(str(loaded_module.__file__)).resolve()
+        if loaded_file != expected_init:
+            raise RuntimeError(
+                "The build loaded LumiUI from the wrong location: "
+                f"{loaded_file} (expected {expected_init})"
+            )
+
+    spec = importlib.util.find_spec("luminiari_ui")
+    if spec is None or spec.origin is None:
+        raise RuntimeError(f"Could not import LumiUI from {LUMIUI_ROOT.resolve()}")
+    resolved_init = Path(spec.origin).resolve()
+    if resolved_init != expected_init:
+        raise RuntimeError(
+            "The build resolved LumiUI from the wrong location: "
+            f"{resolved_init} (expected {expected_init})"
+        )
+    return resolved_init
 
 
 def read_version_info() -> dict[str, str]:
@@ -131,6 +186,36 @@ def copy_runtime_files() -> None:
 
     if ASSET_DIR.is_dir():
         shutil.copytree(ASSET_DIR, RUNTIME_DIR / "assets", dirs_exist_ok=True)
+
+
+def copy_external_package(package_name: str) -> None:
+    """Copy a runtime package, including non-Python theme and image assets."""
+
+    spec = importlib.util.find_spec(package_name)
+    if spec is None:
+        raise RuntimeError(f"Required build package is not installed: {package_name}")
+
+    if spec.submodule_search_locations:
+        source = Path(next(iter(spec.submodule_search_locations)))
+        destination = LIB_DIR / package_name
+        shutil.copytree(
+            source,
+            destination,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
+        return
+
+    if spec.origin is None:
+        raise RuntimeError(f"Could not locate required build package: {package_name}")
+    source = Path(spec.origin)
+    shutil.copy2(source, LIB_DIR / source.name)
+
+
+def copy_external_packages() -> None:
+    LIB_DIR.mkdir(parents=True, exist_ok=True)
+    for package_name in EXTERNAL_PACKAGES:
+        copy_external_package(package_name)
 
 
 def remove_stale_build_outputs() -> None:
@@ -394,6 +479,9 @@ def verify_executable_version_language(exe_path: Path, expected_language: int) -
 
 
 def main() -> None:
+    lumiui_source = configure_lumiui_source()
+    print(f"Using LumiUI source: {lumiui_source}")
+
     from py2exe import freeze
     import py2exe.runtime as py2exe_runtime
 
@@ -430,6 +518,8 @@ def main() -> None:
                 "tkinter.filedialog",
                 "tkinter.messagebox",
                 "_tkinter",
+                "toolkit_assistant.lumi_app",
+                "toolkit_assistant.lumi_widgets",
                 *toolkit_modules(),
             ],
         },
@@ -440,6 +530,7 @@ def main() -> None:
     patch_executable_version_resource(exe_path, version_metadata)
     verify_executable_version_language(exe_path, int(version_metadata["language"]))
     copy_runtime_files()
+    copy_external_packages()
 
 
 if __name__ == "__main__":

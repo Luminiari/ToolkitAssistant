@@ -1,8 +1,61 @@
-"""Public API for Toolkit Assistant."""
-
 from __future__ import annotations
 
-from .app import ToolkitAssistantApp, main
+import importlib.util
+from pathlib import Path
+import sys
+
+
+def _prefer_sibling_lumiui() -> None:
+
+    if getattr(sys, "frozen", False):
+        return
+
+    lumiui_root = Path(__file__).resolve().parents[2] / "LumiUI"
+    package_init = lumiui_root / "luminiari_ui" / "__init__.py"
+    if not package_init.is_file():
+        raise RuntimeError(
+            "LumiUI must be checked out beside ToolkitAssistant: "
+            f"expected {package_init}"
+        )
+
+    toolkit_root = Path(__file__).resolve().parents[1]
+    root_text = str(lumiui_root.resolve())
+    while root_text in sys.path:
+        sys.path.remove(root_text)
+    insert_at = 0
+    for index, entry in enumerate(sys.path):
+        try:
+            if Path(entry or ".").resolve() == toolkit_root:
+                insert_at = index + 1
+                break
+        except OSError:
+            continue
+    sys.path.insert(insert_at, root_text)
+
+    loaded_module = sys.modules.get("luminiari_ui")
+    if loaded_module is not None:
+        loaded_file = Path(str(loaded_module.__file__)).resolve()
+        if loaded_file != package_init.resolve():
+            raise RuntimeError(
+                "ToolkitAssistant loaded LumiUI from the wrong location: "
+                f"{loaded_file} (expected {package_init.resolve()})"
+            )
+        return
+
+    spec = importlib.util.find_spec("luminiari_ui")
+    if spec is None or spec.origin is None:
+        raise RuntimeError(f"Could not import LumiUI from {lumiui_root.resolve()}")
+    resolved_init = Path(spec.origin).resolve()
+    if resolved_init != package_init.resolve():
+        raise RuntimeError(
+            "ToolkitAssistant resolved LumiUI from the wrong location: "
+            f"{resolved_init} (expected {package_init.resolve()})"
+        )
+
+
+_prefer_sibling_lumiui()
+
+from .lumi_app import ToolkitAssistantApp, main
 from .bounds_patcher import (
     find_matching_lsf_by_uuid,
     normalize_uuid_values,
@@ -58,6 +111,13 @@ from .mesh_bounds import (
     read_collada_uninstanced_positions,
     transform_point,
     VISUALBANK_X_OFFSET,
+)
+from .pak_finalisation import (
+    PakFinalisationResult,
+    compress_lz4_literal_block,
+    decompress_lz4_block,
+    default_finalised_pak_path,
+    finalise_pak,
 )
 from .models import BoundsPayload, ImportSourceRepair, LsfBatchTarget, MeshBounds, MeshReference, ProjectBackupCopy
 from .paths import get_game_folder_error, is_path_within

@@ -1,5 +1,3 @@
-"""Toolkit project rename and backup workflows."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -27,7 +25,6 @@ def backup_toolkit_projects(
     project_names: list[str] | tuple[str, ...] | set[str] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Back up Toolkit project folders from a BG3 game folder."""
 
     log = progress or (lambda message: None)
     game_path = Path(game_folder).resolve()
@@ -133,7 +130,6 @@ def rename_toolkit_mod_project(
     temporary_backup_retention_days: int = TEMPORARY_RENAME_BACKUP_RETENTION_DAYS,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Rename Toolkit mod folders under Data and preserve the mod UUID suffix."""
 
     log = progress or (lambda message: None)
     game_path = Path(game_folder).resolve()

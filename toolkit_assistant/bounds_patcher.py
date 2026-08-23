@@ -1,5 +1,3 @@
-"""LSF bounds patching workflows."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -33,11 +31,6 @@ def patch_lsf_file(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Patch a single .lsf file with pasted bounds XML.
-
-    Divine is still required because it performs BG3 LSF <-> LSX resource
-    conversion.
-    """
 
     log = progress or (lambda message: None)
     source_lsf = Path(lsf_file).resolve()
@@ -99,7 +92,6 @@ def patch_lsf_from_related_mesh(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Calculate bounds from the GR2 referenced by an LSF and patch that LSF."""
 
     log = progress or (lambda message: None)
     source_lsf = Path(lsf_file).resolve()
@@ -175,7 +167,6 @@ def patch_visualbank_lsf_files_from_related_mesh(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Calculate bounds from GR2 SourceFile values and patch VisualBank LSF files under a folder."""
 
     log = progress or (lambda message: None)
     root_path = Path(content_folder).resolve()
@@ -293,7 +284,6 @@ def patch_lsf_files_by_uuid(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Patch every matching .lsf under a root using UUID filename matching."""
 
     log = progress or (lambda message: None)
     root_path = Path(lsf_root).resolve()
@@ -375,7 +365,6 @@ def patch_all_visualbank_lsf_files(
     backup_original: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """Patch every valid VisualBank .lsf under a root with pasted bounds XML."""
 
     log = progress or (lambda message: None)
     root_path = Path(lsf_root).resolve()

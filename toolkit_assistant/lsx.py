@@ -1,5 +1,3 @@
-"""LSX payload and node helpers."""
-
 from __future__ import annotations
 
 import copy

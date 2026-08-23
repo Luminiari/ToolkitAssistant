@@ -1,5 +1,3 @@
-"""Persistent user settings."""
-
 from __future__ import annotations
 
 import json
