@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import queue
 import sys
+import tempfile
 import threading
 import webbrowser
 
@@ -31,10 +32,17 @@ from .constants import (
     TEMPORARY_RENAME_BACKUP_RETENTION_DAYS,
     TEMPORARY_RENAME_BACKUP_ROOT,
 )
-from .divine import resolve_divine
+from .divine import extract_package, resolve_divine
 from .import_repair import repair_import_settings_sources
 from .mesh_bounds import calculate_mesh_bounds, format_mesh_bounds_xml
-from .pak_finalisation import default_finalised_pak_path, finalise_pak
+from .pak_finalisation import (
+    PakIndexRestorationNotNeededError,
+    default_extracted_pak_path,
+    default_finalised_pak_path,
+    default_restored_pak_path,
+    finalise_pak,
+    restore_pak_indexes,
+)
 from .paths import get_game_folder_error
 from .project_tools import backup_toolkit_projects, rename_toolkit_mod_project
 from .settings import save_settings
@@ -836,10 +844,14 @@ class ToolkitAssistantApp:
 
     def _build_experimental_tab(self, experimental_tab) -> None:
         experimental_tab.columnconfigure(0, weight=1)
-        experimental_tab.rowconfigure(2, weight=1)
+        experimental_tab.rowconfigure(1, weight=1)
 
-        self.pak_source_path = tk.StringVar(master=self.root)
-        self.pak_output_path = tk.StringVar(master=self.root)
+        self.pak_finalise_source_path = tk.StringVar(master=self.root)
+        self.pak_finalised_output_path = tk.StringVar(master=self.root)
+        self.pak_restore_source_path = tk.StringVar(master=self.root)
+        self.pak_restored_output_path = tk.StringVar(master=self.root)
+        self.pak_extract_source_path = tk.StringVar(master=self.root)
+        self.pak_extract_output_path = tk.StringVar(master=self.root)
 
         heading = ttk.Label(
             experimental_tab,
@@ -850,31 +862,38 @@ class ToolkitAssistantApp:
         self.direct_accent_labels.append(heading)
         heading.grid(row=0, column=0, sticky="w")
 
-        finalisation_box = ttk.LabelFrame(
-            experimental_tab,
-            text="PAK Finalisation",
-            padding=10,
-            style="Accent.TLabelframe",
-        )
-        finalisation_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        pak_tools = ttk.Notebook(experimental_tab)
+        pak_tools.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+
+        finalisation_box = ttk.Frame(pak_tools, padding=12)
+        restoration_box = ttk.Frame(pak_tools, padding=12)
+        extraction_box = ttk.Frame(pak_tools, padding=12)
+        pak_tools.add(finalisation_box, text="PAK Finalisation")
+        pak_tools.add(restoration_box, text="Restore Package Indexes")
+        pak_tools.add(extraction_box, text="Extract Package")
+
         finalisation_box.columnconfigure(1, weight=1)
 
         ttk.Label(finalisation_box, text="Source package").grid(
             row=0, column=0, sticky="w", padx=(0, 8)
         )
-        ttk.Entry(finalisation_box, textvariable=self.pak_source_path).grid(
+        ttk.Entry(
+            finalisation_box, textvariable=self.pak_finalise_source_path
+        ).grid(
             row=0, column=1, sticky="ew", padx=(0, 8)
         )
         ttk.Button(
             finalisation_box,
             text="Browse",
-            command=self._browse_pak_source,
+            command=self._browse_pak_finalise_source,
         ).grid(row=0, column=2, sticky="ew")
 
         ttk.Label(finalisation_box, text="Output package").grid(
             row=1, column=0, sticky="w", padx=(0, 8), pady=(10, 0)
         )
-        ttk.Entry(finalisation_box, textvariable=self.pak_output_path).grid(
+        ttk.Entry(
+            finalisation_box, textvariable=self.pak_finalised_output_path
+        ).grid(
             row=1,
             column=1,
             sticky="ew",
@@ -884,48 +903,112 @@ class ToolkitAssistantApp:
         ttk.Button(
             finalisation_box,
             text="Browse",
-            command=self._browse_pak_output,
+            command=self._browse_pak_finalised_output,
         ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
 
-        note_box = ttk.LabelFrame(
-            finalisation_box,
-            text="Important",
-            padding=10,
-            style="Warning.TLabelframe",
+        finalisation_actions = ttk.Frame(finalisation_box)
+        finalisation_actions.grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0)
         )
-        note_box.grid(
-            row=2,
-            column=0,
-            columnspan=3,
-            sticky="ew",
-            pady=(12, 0),
-        )
-        note_box.columnconfigure(0, weight=1)
-        self._add_wrapping_label(
-            note_box,
-            (
-                "Creates a separate V16 package using an experimental finalisation "
-                "pass. Keep the original source package in a safe place."
-            ),
-        )
-
-        actions = ttk.Frame(finalisation_box)
-        actions.grid(
-            row=3,
-            column=0,
-            columnspan=3,
-            sticky="ew",
-            pady=(12, 0),
-        )
-        actions.columnconfigure(0, weight=1)
+        finalisation_actions.columnconfigure(0, weight=1)
+        ttk.Label(
+            finalisation_actions,
+            text="Don't be a dick with this.",
+        ).grid(row=0, column=0, sticky="w")
         self.pak_finalise_run_button = ttk.Button(
-            actions,
+            finalisation_actions,
             text="Finalise Copy",
             command=self._start_pak_finalisation,
             style="Accent.TButton",
         )
         self.pak_finalise_run_button.grid(row=0, column=1, sticky="e")
         self.run_buttons.append(self.pak_finalise_run_button)
+
+        restoration_box.columnconfigure(1, weight=1)
+
+        ttk.Label(restoration_box, text="Source package").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(
+            restoration_box, textvariable=self.pak_restore_source_path
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(
+            restoration_box,
+            text="Browse",
+            command=self._browse_pak_restore_source,
+        ).grid(row=0, column=2, sticky="ew")
+
+        ttk.Label(restoration_box, text="Output package").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=(10, 0)
+        )
+        ttk.Entry(
+            restoration_box, textvariable=self.pak_restored_output_path
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 8), pady=(10, 0))
+        ttk.Button(
+            restoration_box,
+            text="Browse",
+            command=self._browse_pak_restored_output,
+        ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
+
+        restoration_actions = ttk.Frame(restoration_box)
+        restoration_actions.grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0)
+        )
+        restoration_actions.columnconfigure(0, weight=1)
+        ttk.Label(
+            restoration_actions,
+            text="Don't be a dick with this.",
+        ).grid(row=0, column=0, sticky="w")
+        self.pak_restore_indexes_run_button = ttk.Button(
+            restoration_actions,
+            text="Restore Package Indexes",
+            command=self._start_pak_index_restoration,
+        )
+        self.pak_restore_indexes_run_button.grid(row=0, column=1, sticky="e")
+        self.run_buttons.append(self.pak_restore_indexes_run_button)
+
+        extraction_box.columnconfigure(1, weight=1)
+
+        ttk.Label(extraction_box, text="Source package").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(
+            extraction_box, textvariable=self.pak_extract_source_path
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(
+            extraction_box,
+            text="Browse",
+            command=self._browse_pak_extract_source,
+        ).grid(row=0, column=2, sticky="ew")
+
+        ttk.Label(extraction_box, text="Output folder").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=(10, 0)
+        )
+        ttk.Entry(
+            extraction_box, textvariable=self.pak_extract_output_path
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 8), pady=(10, 0))
+        ttk.Button(
+            extraction_box,
+            text="Browse",
+            command=self._browse_pak_extract_output,
+        ).grid(row=1, column=2, sticky="ew", pady=(10, 0))
+
+        extraction_actions = ttk.Frame(extraction_box)
+        extraction_actions.grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0)
+        )
+        extraction_actions.columnconfigure(0, weight=1)
+        ttk.Label(
+            extraction_actions,
+            text="Don't be a dick with this.",
+        ).grid(row=0, column=0, sticky="w")
+        self.pak_extract_run_button = ttk.Button(
+            extraction_actions,
+            text="Extract Package",
+            command=self._start_pak_extraction,
+        )
+        self.pak_extract_run_button.grid(row=0, column=1, sticky="e")
+        self.run_buttons.append(self.pak_extract_run_button)
 
         self._build_spacer_row(experimental_tab, 2, columnspan=1)
         self.experimental_status_label = self._build_tab_footer(
@@ -1028,18 +1111,18 @@ class ToolkitAssistantApp:
         if path:
             self.mesh_file_path.set(path)
 
-    def _browse_pak_source(self) -> None:
+    def _browse_pak_finalise_source(self) -> None:
         path = filedialog.askopenfilename(
-            title="Choose source package",
+            title="Choose package to finalise",
             filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
         )
         if not path:
             return
-        self.pak_source_path.set(path)
-        self.pak_output_path.set(str(default_finalised_pak_path(path)))
+        self.pak_finalise_source_path.set(path)
+        self.pak_finalised_output_path.set(str(default_finalised_pak_path(path)))
 
-    def _browse_pak_output(self) -> None:
-        source_text = self.pak_source_path.get().strip()
+    def _browse_pak_finalised_output(self) -> None:
+        source_text = self.pak_finalise_source_path.get().strip()
         suggested = (
             default_finalised_pak_path(source_text).name
             if source_text
@@ -1052,7 +1135,58 @@ class ToolkitAssistantApp:
             filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
         )
         if path:
-            self.pak_output_path.set(path)
+            self.pak_finalised_output_path.set(path)
+
+    def _browse_pak_restore_source(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Choose package whose indexes should be restored",
+            filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        self.pak_restore_source_path.set(path)
+        self.pak_restored_output_path.set(str(default_restored_pak_path(path)))
+
+    def _browse_pak_restored_output(self) -> None:
+        source_text = self.pak_restore_source_path.get().strip()
+        suggested = (
+            default_restored_pak_path(source_text).name
+            if source_text
+            else "restored.pak"
+        )
+        path = filedialog.asksaveasfilename(
+            title="Choose restored output package",
+            defaultextension=".pak",
+            initialfile=suggested,
+            filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
+        )
+        if path:
+            self.pak_restored_output_path.set(path)
+
+    def _browse_pak_extract_source(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Choose package to extract",
+            filetypes=(("BG3 packages", "*.pak"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        self.pak_extract_source_path.set(path)
+        self.pak_extract_output_path.set(str(default_extracted_pak_path(path)))
+
+    def _browse_pak_extract_output(self) -> None:
+        source_text = self.pak_extract_source_path.get().strip()
+        suggested = (
+            default_extracted_pak_path(source_text)
+            if source_text
+            else Path.cwd() / "extracted"
+        )
+        path = filedialog.askdirectory(
+            title="Choose package extraction folder",
+            initialdir=str(suggested.parent),
+            mustexist=False,
+        )
+        if path:
+            self.pak_extract_output_path.set(path)
 
     def _browse_auto_selected_lsfs(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -1062,8 +1196,11 @@ class ToolkitAssistantApp:
         if not paths:
             return
 
-        selected_paths: list[str] = []
-        seen: set[str] = set()
+        selected_paths = list(self.auto_selected_lsf_paths)
+        seen = {
+            str(Path(path).resolve()).lower()
+            for path in self.auto_selected_lsf_paths
+        }
         for path in paths:
             key = str(Path(path).resolve()).lower()
             if key in seen:
@@ -1275,7 +1412,9 @@ class ToolkitAssistantApp:
         try:
             divine = str(resolve_divine())
         except FileNotFoundError as exc:
-            raise FileNotFoundError("Choose Divine.exe in Settings before patching.") from exc
+            raise FileNotFoundError(
+                "Choose Divine.exe in Settings before running this tool."
+            ) from exc
 
         self.divine_path.set(divine)
         self._save_current_settings()
@@ -1308,8 +1447,16 @@ class ToolkitAssistantApp:
         self.active_output_name = "Project Tools"
         self.active_status_label = self.project_backup_status_label
 
-    def _activate_experimental_output(self) -> None:
+    def _activate_pak_finalisation_output(self) -> None:
         self.active_output_name = "PAK Finalisation"
+        self.active_status_label = self.experimental_status_label
+
+    def _activate_pak_restoration_output(self) -> None:
+        self.active_output_name = "Restore Package Indexes"
+        self.active_status_label = self.experimental_status_label
+
+    def _activate_pak_extraction_output(self) -> None:
+        self.active_output_name = "Extract Package"
         self.active_status_label = self.experimental_status_label
 
     def _update_auto_selected_lsf_summary(self) -> None:
@@ -1384,9 +1531,9 @@ class ToolkitAssistantApp:
         if self._is_busy():
             return
 
-        self._activate_experimental_output()
-        source_text = self.pak_source_path.get().strip()
-        output_text = self.pak_output_path.get().strip()
+        self._activate_pak_finalisation_output()
+        source_text = self.pak_finalise_source_path.get().strip()
+        output_text = self.pak_finalised_output_path.get().strip()
         source = Path(source_text) if source_text else None
         destination = Path(output_text) if output_text else None
         if source is None or not source.is_file():
@@ -1397,7 +1544,7 @@ class ToolkitAssistantApp:
             return
         if destination is None:
             destination = default_finalised_pak_path(source)
-            self.pak_output_path.set(str(destination))
+            self.pak_finalised_output_path.set(str(destination))
         if destination.suffix.lower() != ".pak":
             messagebox.showwarning(
                 APP_TITLE, "The output package must use the .pak extension."
@@ -1434,6 +1581,120 @@ class ToolkitAssistantApp:
         self.worker = threading.Thread(
             target=self._run_pak_finalisation,
             args=(str(source), str(destination), overwrite),
+            daemon=True,
+        )
+        self.worker.start()
+
+    def _start_pak_index_restoration(self) -> None:
+        if self._is_busy():
+            return
+
+        self._activate_pak_restoration_output()
+        source_text = self.pak_restore_source_path.get().strip()
+        output_text = self.pak_restored_output_path.get().strip()
+        source = Path(source_text) if source_text else None
+        destination = Path(output_text) if output_text else None
+        if source is None or not source.is_file():
+            messagebox.showwarning(APP_TITLE, "Choose a valid source .pak file.")
+            return
+        if source.suffix.lower() != ".pak":
+            messagebox.showwarning(APP_TITLE, "The source must be a .pak file.")
+            return
+        if destination is None:
+            destination = default_restored_pak_path(source)
+            self.pak_restored_output_path.set(str(destination))
+        if destination.suffix.lower() != ".pak":
+            messagebox.showwarning(
+                APP_TITLE, "The restored output must use the .pak extension."
+            )
+            return
+        if os.path.normcase(str(source.resolve())) == os.path.normcase(
+            str(destination.resolve())
+        ):
+            messagebox.showwarning(
+                APP_TITLE, "The output package cannot overwrite the source package."
+            )
+            return
+
+        overwrite = destination.exists()
+        overwrite_note = (
+            "\n\nThe existing output package will be replaced."
+            if overwrite
+            else ""
+        )
+        confirmed = messagebox.askyesno(
+            "Restore Package Indexes",
+            (
+                "Restore the package indexes into a new package copy now?\n\n"
+                "Only recognised Toolkit Assistant finalisation changes will be "
+                f"normalised.{overwrite_note}"
+            ),
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self._clear_output()
+        self._set_running(True)
+        self.worker = threading.Thread(
+            target=self._run_pak_index_restoration,
+            args=(str(source), str(destination), overwrite),
+            daemon=True,
+        )
+        self.worker.start()
+
+    def _start_pak_extraction(self) -> None:
+        if self._is_busy():
+            return
+
+        self._activate_pak_extraction_output()
+        source_text = self.pak_extract_source_path.get().strip()
+        destination_text = self.pak_extract_output_path.get().strip()
+        source = Path(source_text) if source_text else None
+        destination = Path(destination_text) if destination_text else None
+        if source is None or not source.is_file():
+            messagebox.showwarning(APP_TITLE, "Choose a valid source .pak file.")
+            return
+        if source.suffix.lower() != ".pak":
+            messagebox.showwarning(APP_TITLE, "The source must be a .pak file.")
+            return
+        if destination is None:
+            destination = default_extracted_pak_path(source)
+            self.pak_extract_output_path.set(str(destination))
+        if destination.exists() and not destination.is_dir():
+            messagebox.showwarning(
+                APP_TITLE, "The extraction destination must be a folder."
+            )
+            return
+
+        try:
+            divine = self._get_divine_path_for_run()
+        except FileNotFoundError as exc:
+            messagebox.showwarning(APP_TITLE, str(exc))
+            return
+
+        existing_note = ""
+        if destination.is_dir() and any(destination.iterdir()):
+            existing_note = (
+                "\n\nThe selected folder is not empty. Files with matching names "
+                "may be replaced."
+            )
+        confirmed = messagebox.askyesno(
+            "Extract PAK",
+            (
+                "Extract every package entry now? Finalised package indexes are "
+                f"restored in a temporary copy first.{existing_note}"
+            ),
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self._clear_output()
+        self._set_running(True)
+        self.worker = threading.Thread(
+            target=self._run_pak_extraction,
+            args=(str(source), str(destination), divine),
             daemon=True,
         )
         self.worker.start()
@@ -1792,6 +2053,69 @@ class ToolkitAssistantApp:
                 ("log", f"Processed internal path: {result.processed_path}\n")
             )
             self.messages.put(("done", 1))
+        except Exception as exc:
+            self.messages.put(("error", str(exc)))
+
+    def _run_pak_index_restoration(
+        self,
+        source: str,
+        destination: str,
+        overwrite: bool,
+    ) -> None:
+        try:
+            result = restore_pak_indexes(
+                source,
+                destination,
+                overwrite=overwrite,
+                progress=lambda message: self.messages.put(("log", message)),
+            )
+            self.messages.put(
+                (
+                    "log",
+                    f"Restored package indexes: {len(result.processed_paths)}\n",
+                )
+            )
+            self.messages.put(("done", 1))
+        except Exception as exc:
+            self.messages.put(("error", str(exc)))
+
+    def _run_pak_extraction(
+        self,
+        source: str,
+        destination: str,
+        divine: str,
+    ) -> None:
+        def log(message: str) -> None:
+            self.messages.put(("log", message))
+
+        try:
+            source_path = Path(source)
+            package_to_extract = source_path
+            with tempfile.TemporaryDirectory(
+                prefix="ToolkitAssistant-pak-extract-"
+            ) as temporary_dir:
+                temporary_package = Path(temporary_dir) / source_path.name
+                try:
+                    restore_pak_indexes(
+                        source_path,
+                        temporary_package,
+                        progress=log,
+                    )
+                    package_to_extract = temporary_package
+                    log("Using temporary package with restored indexes.\n")
+                except PakIndexRestorationNotNeededError:
+                    log(
+                        "Package indexes do not require restoration; "
+                        "extracting the source package directly.\n"
+                    )
+
+                extracted_count = extract_package(
+                    Path(divine),
+                    package_to_extract,
+                    Path(destination),
+                    progress=log,
+                )
+            self.messages.put(("done", extracted_count))
         except Exception as exc:
             self.messages.put(("error", str(exc)))
 

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from typing import Callable
 
 from .constants import APP_DIR
 
@@ -114,3 +115,55 @@ def convert_model(divine: Path, source: Path, destination: Path) -> None:
     if not destination.is_file():
         output = (result.stdout + result.stderr).strip()
         raise RuntimeError(f"Divine did not create {destination}.\n{output}")
+
+
+def extract_package(
+    divine: Path,
+    source: Path,
+    destination: Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> int:
+    log = progress or (lambda _message: None)
+    destination.mkdir(parents=True, exist_ok=True)
+    args = [
+        str(divine),
+        "-g",
+        "bg3",
+        "-a",
+        "extract-package",
+        "-s",
+        str(source),
+        "-d",
+        str(destination),
+    ]
+
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    log(f"Extracting package: {source}\n")
+    log(f"Extraction folder: {destination}\n")
+    result = subprocess.run(
+        args,
+        cwd=str(APP_DIR),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=creationflags,
+        check=False,
+    )
+    output = (result.stdout + result.stderr).strip()
+    if output:
+        log(f"{output}\n")
+    if result.returncode != 0:
+        raise RuntimeError(f"Divine package extraction failed.\n{output}")
+
+    extracted_count = sum(1 for path in destination.rglob("*") if path.is_file())
+    if extracted_count == 0:
+        raise RuntimeError(
+            f"Divine completed without extracting any files to {destination}."
+        )
+    log(f"Files in extraction folder: {extracted_count}\n")
+    return extracted_count
