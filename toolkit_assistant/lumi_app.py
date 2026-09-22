@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import queue
 import threading
+import tkinter as tk
 
 from luminiari_ui import (
     FAILURE,
     SUCCESS,
-    LumiApp,
+    LumiApp as BaseLumiApp,
     LumiColourButton,
     LumiIconButton,
     LumiListBox,
@@ -16,7 +17,7 @@ from luminiari_ui import (
     LumiScrollableFrame,
     LumiStyle,
     LumiTextBox,
-    LumiWindow,
+    LumiWindow as BaseLumiWindow,
     appearance_colour,
     mono_font,
 )
@@ -33,6 +34,7 @@ from .constants import (
 )
 from .divine import find_default_divine
 from .lumi_widgets import ttk as lumi_ttk
+from .project_tools import find_toolkit_project_names
 from .settings import load_settings
 from .ui_theme import (
     ACCENT_COLOR_SETTING_KEY,
@@ -46,6 +48,30 @@ from .ui_theme import (
 
 legacy.load_tk()
 legacy.ttk = lumi_ttk
+
+
+class SafeDelayedFocusMixin:
+
+    def after(self, ms, func=None, *args):
+        target = getattr(func, "__self__", None)
+        method = getattr(func, "__func__", None)
+        if isinstance(target, tk.Misc) and method in (tk.Misc.focus_set, tk.Misc.focus_force):
+            original = func
+
+            def restore_focus(*callback_args):
+                if target.winfo_exists():
+                    return original(*callback_args)
+
+            func = restore_focus
+        return super().after(ms, func, *args)
+
+
+class LumiApp(SafeDelayedFocusMixin, BaseLumiApp):
+    pass
+
+
+class LumiWindow(SafeDelayedFocusMixin, BaseLumiWindow):
+    pass
 
 
 class ToolkitAssistantApp(legacy.ToolkitAssistantApp):
@@ -567,7 +593,7 @@ class ToolkitAssistantApp(legacy.ToolkitAssistantApp):
             )
             return
         try:
-            project_names = legacy.find_toolkit_project_names(projects_dir)
+            project_names = find_toolkit_project_names(projects_dir)
         except OSError as exc:
             legacy.messagebox.showwarning(
                 APP_TITLE, f"Could not read Projects folder: {exc}"
