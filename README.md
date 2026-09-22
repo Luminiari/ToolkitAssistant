@@ -17,6 +17,7 @@ If you are here to look at the source or build it yourself, I am sorry for what 
 * Repairs import settings XML paths that got rewritten to absolute `Data/ASSETS` paths
 * Renames Toolkit mod folders while preserving UUID suffixes
 * Backs up Toolkit project folders before you do something adventurous
+* Other secret fun stuff ( ͡° ͜ʖ ͡°)
 
 ## Requirements
 
