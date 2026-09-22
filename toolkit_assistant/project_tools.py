@@ -14,7 +14,7 @@ from .constants import (
     WINDOWS_INVALID_FILENAME_CHARS,
 )
 from .models import ProjectBackupCopy
-from .paths import get_game_folder_error, is_path_within
+from .paths import extended_length_path, get_game_folder_error, is_path_within
 from .xml_utils import get_direct_attribute_by_id, iter_elements, save_xml
 
 
@@ -100,7 +100,7 @@ def backup_toolkit_projects(
                 continue
 
             log(f"  Copying: {copy_item.source} -> {copy_item.destination}\n")
-            shutil.copytree(copy_item.source, copy_item.destination)
+            shutil.copytree(extended_length_path(copy_item.source), extended_length_path(copy_item.destination))
 
         if bits_that_exist:
             backed_up += 1
@@ -313,7 +313,7 @@ def create_temporary_project_rename_backup(
     progress(f"Temporary backup: {this_backup}\n")
     for copy_item in bits_that_exist:
         progress(f"  Copying: {copy_item.source} -> {copy_item.destination}\n")
-        shutil.copytree(copy_item.source, copy_item.destination)
+        shutil.copytree(extended_length_path(copy_item.source), extended_length_path(copy_item.destination))
 
     return this_backup
 
@@ -358,7 +358,7 @@ def prune_temporary_project_backups(
             continue
 
         try:
-            shutil.rmtree(entry)
+            shutil.rmtree(extended_length_path(entry))
         except OSError as exc:
             progress(f"Warning: could not remove expired temporary backup '{entry}': {exc}\n")
             continue

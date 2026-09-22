@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+
+
+def extended_length_path(path: str | Path) -> Path:
+    if os.name != "nt":
+        return Path(path)
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
 
 
 def get_game_folder_error(game_folder: str | Path) -> str | None:
